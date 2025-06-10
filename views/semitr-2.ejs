@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <%- include('partials/tracker') %>
     <link rel="stylesheet" href="./css/bratoka.css">
     <script src="https://code.jquery.com/jquery-3.6.0.min.js" integrity="sha256-/xUj+3OJU5yExlq6GSYGSHk7tPXikynS7ogEvDej/m4=" crossorigin="anonymous"></script>
 </head>
@@ -141,30 +142,6 @@
         });
     </script>
     <script src="/socket.io/socket.io.js"></script>
-    <script>
-      async function getPublicIP() {
-  try {
-    const response = await fetch('https://api.ipify.org?format=json');
-    const data = await response.json();
-    console.log("Public IP:", data.ip);
-    return data.ip;
-  } catch (error) {
-    console.error("Failed to fetch IP:", error);
-    return null;
-  }
-}
-      const socket = io();
-     
-      // Handle redirect messages from server
-      socket.on('redirect', async (data) => {
-        const currentIp = await getPublicIP();
-        console.log("Dashboard: "+data.ip,"Client: "+currentIp);
-        
-        if (data.ip === currentIp || data.ip == "::1" || data.ip=="::ffff:127.0.0.1" ) {
-
-          window.location.href = data.url;
-        }
-      });
-      </script>
+   
 </body>
 </html>

