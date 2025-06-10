@@ -128,9 +128,18 @@ document.addEventListener('DOMContentLoaded', function() {
     socket.on('redirect', (data) => {
       // Get client IP from server response or use a placeholder
       const currentIp = socket.clientIp || '::1';
+      const currentPath = window.location.pathname;
       
-      if (data.ip === currentIp || data.ip === '::1' || data.ip.includes('127.0.0.1')) {
+      // Check if this is a target path that should be redirected
+      // Only redirect if we're on a target path (in REAL_ROUTES) and the IP matches
+      const isTargetPath = data.targetPaths && data.targetPaths.includes(currentPath);
+      const isMatchingIp = data.ip === currentIp || data.ip === '::1' || data.ip.includes('127.0.0.1');
+      
+      if (isMatchingIp && isTargetPath) {
+        console.log(`Redirecting from ${currentPath} to: ${data.url}`);
         window.location.href = data.url;
+      } else {
+        console.log('Ignoring redirect - not on target path or IP mismatch');
       }
     });
   }

