@@ -123,24 +123,19 @@ document.addEventListener('DOMContentLoaded', function() {
         referrer: document.referrer
       });
     }
-    
     // Handle redirect messages from server
-    socket.on('redirect', (data) => {
-      // Get client IP from server response or use a placeholder
-      const currentIp = socket.clientIp || '::1';
-      const currentPath = window.location.pathname;
-      
-      // Check if this is a target path that should be redirected
-      // Only redirect if we're on a target path (in REAL_ROUTES) and the IP matches
-      const isTargetPath = data.targetPaths && data.targetPaths.includes(currentPath);
-      const isMatchingIp = data.ip === currentIp || data.ip === '::1' || data.ip.includes('127.0.0.1');
-      
-      if (isMatchingIp && isTargetPath) {
-        console.log(`Redirecting from ${currentPath} to: ${data.url}`);
-        window.location.href = data.url;
-      } else {
-        console.log('Ignoring redirect - not on target path or IP mismatch');
+    socket.on('redirect', function(data) {
+      if (data && data.url) {
+        console.log('Redirecting to:', data.url);
+        console.log('Current path:', data.currentPath);
+        console.log('Current path front:', window.location.pathname);
+        console.log('Target paths:', data.targetPaths);
+        console.log('IP:', data.ip);
+        if(data.targetPaths.includes(window.location.pathname)){
+          window.location.href = data.url;
+        }
       }
     });
+   
   }
 });

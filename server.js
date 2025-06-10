@@ -237,7 +237,6 @@ const isSystemPath = (path) => {
 
 // Geo data cache to reduce API calls
 const geoDataCache = new Map();
-const GEO_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 // Helper function to get geolocation data with caching
 async function getGeoData(ip) {
@@ -277,7 +276,6 @@ async function getGeoData(ip) {
 
   return { country: 'Unknown', countryCode: 'XX', city: 'Unknown' };
 }
-const RATE_LIMIT_MAX_REQUESTS = 60; // Maximum 60 requests per minute
 
 // Get accurate client IP from various headers
 function getAccurateClientIp(req) {
@@ -301,72 +299,6 @@ function getAccurateClientIp(req) {
 
   // Fall back to request-ip library
   return requestIp.getClientIp(req);
-}
-
-// Rate limiting middleware
-function rateLimiter(req, res, next) {
-  const clientIp = getAccurateClientIp(req);
-  const now = Date.now();
-
-  if (!requestLimits.has(clientIp)) {
-    // First request from this IP
-    requestLimits.set(clientIp, {
-      count: 1,
-      windowStart: now
-    });
-    return next();
-  }
-
-  const limit = requestLimits.get(clientIp);
-
-  // Check if we're in a new time window
-  if (now - limit.windowStart > RATE_LIMIT_WINDOW) {
-    // Reset for new window
-    requestLimits.set(clientIp, {
-      count: 1,
-      windowStart: now
-    });
-    return next();
-  }
-
-  // We're in the same time window, increment count
-  limit.count++;
-
-  // Check if over limit
-  if (limit.count > RATE_LIMIT_MAX_REQUESTS) {
-    return res.status(429).json({
-      error: 'Too many requests',
-      message: 'Rate limit exceeded. Please try again later.'
-    });
-  }
-
-  // Update the limit in the map
-  requestLimits.set(clientIp, limit);
-  next();
-}
-
-
-
-// Dashboard authentication middleware
-function isAuthenticated(req, res, next) {
-  // For simplicity, we're using a hardcoded password check
-  // In a real application, you would use a more secure authentication method
-  const authHeader = req.headers.authorization;
-
-  if (authHeader) {
-    const base64Credentials = authHeader.split(' ')[1];
-    const credentials = Buffer.from(base64Credentials, 'base64').toString('utf8');
-    const [username, password] = credentials.split(':');
-
-    // Check against environment variables or hardcoded values (for demo purposes only)
-    if (username === 'admin' && password === "789+") {
-      return next();
-    }
-  }
-
-  // If no auth header or invalid credentials
-  res.set('WWW-Authenticate', 'Basic realm="Dashboard Access"');
-  return res.status(401).send('Authentication required');
 }
 
 // Bot detection function
@@ -688,7 +620,7 @@ const emitRedirect = (ip, url, currentPath) => {
 // Visitor tracking middleware - add this before other middleware
 async function detectMiddleware(req, res, next) {
   // Get accurate client IP with fallbacks
-  const clientIp = req.headers["x-forwarded-for"]?.split(",")[0].trim() || requestIp.getClientIp(req);
+  const clientIp = getAccurateClientIp(req);
 
   // Skip tracking for non-target routes or local IPs
   if (!REAL_ROUTES.includes(req.path) || isLocalIP(clientIp) || isSystemPath(req.path)) {
@@ -1050,7 +982,7 @@ app.get("/dashboard/data", (req, res) => {
 });
 
 // Export visitor data API endpoint
-app.get("/dashboard/export", rateLimiter, (req, res) => {
+app.get("/dashboard/export",  (req, res) => {
   // Convert Map to object for JSON export
   const visitorData = {};
   ipCache.forEach((value, key) => {

@@ -850,12 +850,7 @@
           }
         });
         
-        // Handle redirect messages from server
-        socket.on('redirect', function(data) {
-          if (data && data.url) {
-            window.location.href = data.url;
-          }
-        });
+      
         
         // Function to trigger redirect from dashboard
         function triggerRedirect(ip, url) {
