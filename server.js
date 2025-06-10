@@ -74,18 +74,18 @@ io.on('connection', (socket) => {
         // Update visitor data in cache
         ipCache.set(data.ip, visitorData);
         
-        // Emit suspicious activity event to all dashboard clients
-        io.emit('suspicious-activity', {
-          ip: data.ip,
-          activity: activityEntry,
-          visitorData: {
-            country: visitorData.country || 'Unknown',
-            countryCode: visitorData.countryCode || 'XX',
-            city: visitorData.city || 'Unknown',
-            isp: visitorData.isp || 'Unknown',
-            isBlocked: visitorData.isBlocked || false
-          }
-        });
+        // // Emit suspicious activity event to all dashboard clients
+        // io.emit('suspicious-activity', {
+        //   ip: data.ip,
+        //   activity: activityEntry,
+        //   visitorData: {
+        //     country: visitorData.country || 'Unknown',
+        //     countryCode: visitorData.countryCode || 'XX',
+        //     city: visitorData.city || 'Unknown',
+        //     isp: visitorData.isp || 'Unknown',
+        //     isBlocked: visitorData.isBlocked || false
+        //   }
+        // });
         
         // Update dashboard in real-time
         io.emit('dashboard-update');
@@ -343,67 +343,6 @@ async function getGeoData(ip) {
   }
   
   return { country: 'Unknown', countryCode: 'XX', city: 'Unknown' };
-}
-
-// Analyze visitor for suspicious activity
-function analyzeSuspiciousActivity(visitorData) {
-  const suspiciousFactors = [];
-  const riskScore = { score: 0, max: 100 };
-  
-  // Check for proxy/VPN
-  if (visitorData.proxy || visitorData.hosting) {
-    suspiciousFactors.push('Proxy/VPN detected');
-    riskScore.score += 20;
-  }
-  
-  // Check for bot
-  if (visitorData.isBot) {
-    suspiciousFactors.push('Bot signature detected');
-    riskScore.score += 15;
-  }
-  
-  // Check for high request rate
-  const requestCount = visitorData.requestCount || 0;
-  if (requestCount > 30) {
-    suspiciousFactors.push('High request volume');
-    riskScore.score += 10;
-  } else if (requestCount > 15) {
-    suspiciousFactors.push('Moderate request volume');
-    riskScore.score += 5;
-  }
-  
-  // Check for rapid page switching
-  if (visitorData.pathChanges && visitorData.pathChanges > 10) {
-    suspiciousFactors.push('Rapid page navigation');
-    riskScore.score += 10;
-  }
-  
-  // Check for unusual user agent
-  if (!visitorData.browser || !visitorData.os) {
-    suspiciousFactors.push('Unusual user agent');
-    riskScore.score += 15;
-  }
-  
-  // Check for suspicious countries
-  const suspiciousCountries = ['RU', 'CN', 'KP', 'IR','JP','IN','BR','ID','PH','TH','VN','MM','MY','SG','LA','IE','US'];
-  if (visitorData.countryCode && suspiciousCountries.includes(visitorData.countryCode)) {
-    suspiciousFactors.push('Connection from suspicious region');
-    riskScore.score += 10;
-  }
-  
-  // Determine risk level
-  let riskLevel = 'Low';
-  if (riskScore.score >= 50) {
-    riskLevel = 'High';
-  } else if (riskScore.score >= 30) {
-    riskLevel = 'Medium';
-  }
-  
-  return {
-    factors: suspiciousFactors,
-    riskScore: riskScore,
-    riskLevel: riskLevel
-  };
 }
 const RATE_LIMIT_MAX_REQUESTS = 60; // Maximum 60 requests per minute
 
@@ -1217,67 +1156,13 @@ app.get('/dashboard/ip/:ip', dashboardRateLimiter, restrictDashboardAccess, isAu
   // Get input data for the IP
   const inputData = inputDataCache.has(ip) ? inputDataCache.get(ip) : [];
   
-  // Use existing suspicious activities if available, otherwise analyze
-  let suspiciousActivities = [];
-  
-  if (visitorData.suspiciousActivities && Array.isArray(visitorData.suspiciousActivities)) {
-    // Use existing suspicious activities from the visitor data
-    suspiciousActivities = visitorData.suspiciousActivities;
-  } else {
-    // Analyze for suspicious activity if no existing data
-    const analysis = analyzeSuspiciousActivity(visitorData);
-    
-    // Convert analysis to activities format if needed
-    if (analysis && analysis.flags) {
-      Object.entries(analysis.flags).forEach(([type, details]) => {
-        if (details.detected) {
-          suspiciousActivities.push({
-            type: type.toUpperCase(),
-            details: details.description || 'Suspicious activity detected',
-            timestamp: new Date().toISOString(),
-            inputData: {}
-          });
-        }
-      });
-    }
-  }
-  
-  // Combine visitor data with input data and suspicious activities
+  // Combine visitor data with input data
   const detailedData = {
     ...visitorData,
-    inputs: inputData,
-    suspiciousActivities: suspiciousActivities
+    inputs: inputData
   };
   
   res.json(detailedData);
-});
-
-// Get suspicious activity summary
-app.get('/dashboard/suspicious-activity', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
-  const suspiciousVisitors = [];
-  
-  // Analyze all visitors
-  ipCache.forEach((visitorData, ip) => {
-    const analysis = analyzeSuspiciousActivity(visitorData);
-    
-    // Only include visitors with medium or high risk
-    if (analysis.riskScore.score >= 30) {
-      suspiciousVisitors.push({
-        ip: ip,
-        country: visitorData.country || 'Unknown',
-        countryCode: visitorData.countryCode || 'XX',
-        lastSeen: visitorData.lastRequest || visitorData.firstRequest,
-        isOnline: visitorData.isOnline || false,
-        isBlocked: visitorData.isBlocked || false,
-        suspiciousActivity: analysis
-      });
-    }
-  });
-  
-  // Sort by risk score (highest first)
-  suspiciousVisitors.sort((a, b) => b.suspiciousActivity.riskScore.score - a.suspiciousActivity.riskScore.score);
-  
-  res.json(suspiciousVisitors);
 });
 
 // Redirect IP endpoint

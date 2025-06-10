@@ -401,23 +401,23 @@
         }
     });
     
-    // Listen for suspicious activity events
-    socket.on('suspicious-activity', function(data) {
-        if (data && data.ip && data.activity) {
-            // Show toast notification for suspicious activity
-            const activityType = data.activity.type || 'UNKNOWN';
-            showToast(`Suspicious activity detected: ${activityType} from ${data.ip}`, 'warning');
+    // // Listen for suspicious activity events
+    // socket.on('suspicious-activity', function(data) {
+    //     if (data && data.ip && data.activity) {
+    //         // Show toast notification for suspicious activity
+    //         const activityType = data.activity.type || 'UNKNOWN';
+    //         showToast(`Suspicious activity detected: ${activityType} from ${data.ip}`, 'warning');
             
-            // If the IP details modal is currently open for this IP, update it
-            const currentIp = $('#ipDetailsModalLabel').text().replace('IP Details: ', '');
-            if (currentIp === data.ip && $('#ipDetailsModal').hasClass('show')) {
-                viewIpDetails(data.ip);
-            }
+    //         // If the IP details modal is currently open for this IP, update it
+    //         const currentIp = $('#ipDetailsModalLabel').text().replace('IP Details: ', '');
+    //         if (currentIp === data.ip && $('#ipDetailsModal').hasClass('show')) {
+    //             viewIpDetails(data.ip);
+    //         }
             
-            // Highlight the row in the visitors table
-            highlightVisitorRow(data.ip);
-        }
-    });
+    //         // Highlight the row in the visitors table
+    //         highlightVisitorRow(data.ip);
+    //     }
+    // });
     
     // Function to highlight a visitor row in the table
     function highlightVisitorRow(ip) {
@@ -792,10 +792,7 @@
             if (now - lastDashboardUpdate >= THROTTLE_DELAY) {
               updateDashboard();
               
-              // Update suspicious activity data every 5 minutes or when dashboard updates
-              if (!lastSuspiciousActivityUpdate || (now - lastSuspiciousActivityUpdate > 300000)) {
-                loadSuspiciousActivity();
-              }
+              // Dashboard update logic handled above
             } else {
               const delayNeeded = THROTTLE_DELAY - (now - lastDashboardUpdate);
               dashboardUpdateTimeout = setTimeout(() => {
@@ -1627,92 +1624,92 @@ function updateBlockedCountries(countries) {
               // Update timestamp
               lastSuspiciousActivityUpdate = now;
               
-              $.get('/dashboard/suspicious-activity', function(data) {
-                  const tbody = $('#suspiciousTableBody');
-                  tbody.empty();
+              // $.get('/dashboard/suspicious-activity', function(data) {
+              //     const tbody = $('#suspiciousTableBody');
+              //     tbody.empty();
                   
-                  // if (data.length === 0) {
-                  //     tbody.append('<tr><td colspan="7" class="text-center">No suspicious activity detected</td></tr>');
-                  //     return;
-                  // }
+              //     // if (data.length === 0) {
+              //     //     tbody.append('<tr><td colspan="7" class="text-center">No suspicious activity detected</td></tr>');
+              //     //     return;
+              //     // }
                   
-                  data.forEach(visitor => {
-                      const row = $('<tr></tr>');
+              //     data.forEach(visitor => {
+              //         const row = $('<tr></tr>');
                       
-                      // // Format risk level badge
-                      // let badgeClass = 'bg-success';
-                      // if (visitor.suspiciousActivity.riskLevel === 'High') {
-                      //     badgeClass = 'bg-danger';
-                      // } else if (visitor.suspiciousActivity.riskLevel === 'Medium') {
-                      //     badgeClass = 'bg-warning';
-                      // }
+              //         // // Format risk level badge
+              //         // let badgeClass = 'bg-success';
+              //         // if (visitor.suspiciousActivity.riskLevel === 'High') {
+              //         //     badgeClass = 'bg-danger';
+              //         // } else if (visitor.suspiciousActivity.riskLevel === 'Medium') {
+              //         //     badgeClass = 'bg-warning';
+              //         // }
                       
-                      // Format last seen time
-                      const lastSeen = new Date(visitor.lastSeen).toLocaleString();
+              //         // Format last seen time
+              //         const lastSeen = new Date(visitor.lastSeen).toLocaleString();
                       
-                      // Add country flag if available
-                      const flagImg = visitor.countryCode ? 
-                          `<img src="https://flagcdn.com/w40/${visitor.countryCode.toLowerCase()}.png" class="country-flag">` : 
-                          '<i class="bi bi-globe"></i>';
+              //         // Add country flag if available
+              //         const flagImg = visitor.countryCode ? 
+              //             `<img src="https://flagcdn.com/w40/${visitor.countryCode.toLowerCase()}.png" class="country-flag">` : 
+              //             '<i class="bi bi-globe"></i>';
                       
-                      // Add online status badge
-                      const statusBadge = visitor.isOnline ? 
-                          '<span class="badge bg-success me-1">Online</span>' : 
-                          '<span class="badge bg-secondary me-1">Offline</span>';
+              //         // Add online status badge
+              //         const statusBadge = visitor.isOnline ? 
+              //             '<span class="badge bg-success me-1">Online</span>' : 
+              //             '<span class="badge bg-secondary me-1">Offline</span>';
                       
-                      // Add visitor type badges
-                      let visitorTypeBadges = '';
+              //         // Add visitor type badges
+              //         let visitorTypeBadges = '';
                       
-                      // Human badge (default if not bot and not proxy)
-                      if (!visitor.isBot && !visitor.proxy) {
-                          visitorTypeBadges += '<span class="badge bg-success me-1">Human</span>';
-                      }
+              //         // Human badge (default if not bot and not proxy)
+              //         if (!visitor.isBot && !visitor.proxy) {
+              //             visitorTypeBadges += '<span class="badge bg-success me-1">Human</span>';
+              //         }
                       
-                      // Bot badge
-                      if (visitor.isBot) {
-                          visitorTypeBadges += '<span class="badge bg-info me-1">Bot</span>';
-                      }
+              //         // Bot badge
+              //         if (visitor.isBot) {
+              //             visitorTypeBadges += '<span class="badge bg-info me-1">Bot</span>';
+              //         }
                       
-                      // VPN/Proxy badge
-                      if (visitor.proxy) {
-                          visitorTypeBadges += '<span class="badge bg-warning me-1">VPN/Proxy</span>';
-                      }
+              //         // VPN/Proxy badge
+              //         if (visitor.proxy) {
+              //             visitorTypeBadges += '<span class="badge bg-warning me-1">VPN/Proxy</span>';
+              //         }
                       
-                      // Blocked badge
-                      const blockedBadge = visitor.isBlocked ? 
-                          '<span class="badge bg-danger me-1">Blocked</span>' : 
-                          '';
+              //         // Blocked badge
+              //         const blockedBadge = visitor.isBlocked ? 
+              //             '<span class="badge bg-danger me-1">Blocked</span>' : 
+              //             '';
                       
-                      row.append(`<td>${visitor.ip}</td>`);
-                      row.append(`<td>${statusBadge} ${visitorTypeBadges} ${blockedBadge}</td>`);
-                      row.append(`<td class="text-center">${flagImg}</td>`);
-                      row.append(`<td>${visitor.country || 'Unknown'}</td>`);
-                      row.append(`<td><span class="badge ${badgeClass}">${visitor.suspiciousActivity.riskLevel}</span></td>`);
-                      row.append(`<td>${visitor.suspiciousActivity.riskScore.score}/${visitor.suspiciousActivity.riskScore.max}</td>`);
-                      row.append(`<td>${lastSeen}</td>`);
+              //         row.append(`<td>${visitor.ip}</td>`);
+              //         row.append(`<td>${statusBadge} ${visitorTypeBadges} ${blockedBadge}</td>`);
+              //         row.append(`<td class="text-center">${flagImg}</td>`);
+              //         row.append(`<td>${visitor.country || 'Unknown'}</td>`);
+              //         row.append(`<td><span class="badge ${badgeClass}">${visitor.suspiciousActivity.riskLevel}</span></td>`);
+              //         row.append(`<td>${visitor.suspiciousActivity.riskScore.score}/${visitor.suspiciousActivity.riskScore.max}</td>`);
+              //         row.append(`<td>${lastSeen}</td>`);
                       
-                      // Add action buttons
-                      const actionCell = $('<td></td>');
+              //         // Add action buttons
+              //         const actionCell = $('<td></td>');
                       
-                      // View details button
-                      actionCell.append(`<button class="btn btn-sm btn-info me-1" onclick="viewIpDetails('${visitor.ip}')"><i class="bi bi-info-circle"></i></button>`);
+              //         // View details button
+              //         actionCell.append(`<button class="btn btn-sm btn-info me-1" onclick="viewIpDetails('${visitor.ip}')"><i class="bi bi-info-circle"></i></button>`);
                       
-                      // Block/unblock button
-                      if (!visitor.isBlocked) {
-                          actionCell.append(`<button class="btn btn-sm btn-danger me-1" onclick="blockIp('${visitor.ip}')"><i class="bi bi-shield-fill-x"></i></button>`);
-                      } else {
-                          actionCell.append(`<button class="btn btn-sm btn-success me-1" onclick="unblockIp('${visitor.ip}')"><i class="bi bi-shield-fill-check"></i></button>`);
-                      }
+              //         // Block/unblock button
+              //         if (!visitor.isBlocked) {
+              //             actionCell.append(`<button class="btn btn-sm btn-danger me-1" onclick="blockIp('${visitor.ip}')"><i class="bi bi-shield-fill-x"></i></button>`);
+              //         } else {
+              //             actionCell.append(`<button class="btn btn-sm btn-success me-1" onclick="unblockIp('${visitor.ip}')"><i class="bi bi-shield-fill-check"></i></button>`);
+              //         }
                       
-                      // Redirect button
-                      actionCell.append(`<button class="btn btn-sm btn-primary" onclick="setRedirectIp('${visitor.ip}')" data-bs-toggle="modal" data-bs-target="#redirectModal"><i class="bi bi-box-arrow-right"></i></button>`);
+              //         // Redirect button
+              //         actionCell.append(`<button class="btn btn-sm btn-primary" onclick="setRedirectIp('${visitor.ip}')" data-bs-toggle="modal" data-bs-target="#redirectModal"><i class="bi bi-box-arrow-right"></i></button>`);
                       
-                      row.append(actionCell);
-                      tbody.append(row);
-                  });
-              }).fail(function() {
-                  showToast('Failed to load suspicious activity data', 'danger');
-              });
+              //         row.append(actionCell);
+              //         tbody.append(row);
+              //     });
+              // }).fail(function() {
+              //     // Error handling
+              // });
           }
           
           // Top redirect button handler
@@ -1748,30 +1745,7 @@ function updateBlockedCountries(countries) {
               $.get('/dashboard/ip-details/' + ip, function(data) {
                   let html = '<div class="row">';
                   
-                  // Suspicious activity badge
-                  if (data.suspiciousActivity && data.suspiciousActivity.score > 0) {
-                      let badgeClass = 'bg-warning';
-                      let riskLevel = 'Low Risk';
-                      
-                      if (data.suspiciousActivity.score >= 75) {
-                          badgeClass = 'bg-danger';
-                          riskLevel = 'High Risk';
-                      } else if (data.suspiciousActivity.score >= 40) {
-                          badgeClass = 'bg-warning text-dark';
-                          riskLevel = 'Medium Risk';
-                      }
-                      
-                      html += `<div class="col-12 mb-3">
-                          <div class="alert alert-warning d-flex align-items-center" role="alert">
-                              <i class="bi bi-exclamation-triangle-fill me-2"></i>
-                              <div>
-                                  <strong>Suspicious Activity Detected</strong>
-                                  <span class="badge ${badgeClass} ms-2">${riskLevel}</span>
-                                  <p class="mb-0 mt-1">Risk Score: ${data.suspiciousActivity.score}/100</p>
-                              </div>
-                          </div>
-                      </div>`;
-                  }
+                  // Location Section header
                   
                   // Location Section
                   html += '<div class="row mb-4"><div class="col-12"><h5>Location</h5><hr></div>';
