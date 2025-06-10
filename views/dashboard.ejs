@@ -120,8 +120,28 @@
           </div>
         </div>
       </div>
-<div>
-</div>
+      
+      <!-- Suspicious Activity Card -->
+      <div class="row mb-4">
+        <div class="col-12">
+          <div class="card shadow-sm">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center py-3">
+              <h5 class="mb-0">Suspicious Activity</h5>
+              <button class="btn btn-sm btn-outline-secondary" id="refreshSuspiciousBtn">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+              </button>
+            </div>
+            <div class="card-body">
+              <div class="row mb-3" id="suspiciousActivityContainer">
+                <div class="col-12 text-center py-4">
+                  <div class="spinner-border" role="status"></div>
+                  <p class="text-muted mt-2">Loading suspicious activity data...</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     
 
       <!-- Country Blocking Section -->
@@ -225,10 +245,15 @@
                     <option value="requests">Sort by Request Count</option>
                   </select>
                 </div>
-                <div class="col-md-2">
+                <div class="col-md-1">
                   <button class="btn btn-outline-secondary w-100" id="refreshTableBtn">
                     <i class="bi bi-arrow-clockwise"></i> Refresh
                   </button>
+                </div>
+                <div class="col-md-1">
+                  <a href="/dashboard/export" class="btn btn-outline-primary w-100" id="exportDataBtn">
+                    <i class="bi bi-download"></i> Export
+                  </a>
                 </div>
               </div>
               
@@ -372,31 +397,76 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     <script>
-      const socket = io();
+      // Throttling variables to prevent 429 errors
+      const THROTTLE_DELAY = 5000; // 5 seconds between API calls
+      let lastDashboardUpdate = 0;
+      let lastSuspiciousActivityUpdate = 0;
+      let dashboardUpdateTimeout = null;
+      let suspiciousActivityTimeout = null;
+      let pendingDashboardUpdate = false;
+      let pendingSuspiciousUpdate = false;
       
-      // Initialize country filter mode from localStorage or server settings
-      let countryAllowMode = localStorage.getItem('countryAllowMode') === 'true' || '<%= countryFilterMode %>' === 'allow-only';
-      
-      // Send current page path to server
-      socket.emit('page-view', { path: window.location.pathname });
-      
-      // Listen for dashboard updates from server
-      socket.on('dashboard-update', function() {
-        console.log('Dashboard update received');
-        updateDashboard();
-      });
-      
-      // Handle redirect messages from server
-      socket.on('redirect', (data) => {
-        if (data.ip === currentIp) {
-          window.location.href = data.url;
+      $(document).ready(function() {
+        const socket = io();
+        
+        // Initialize country filter mode from localStorage or server settings
+        let countryAllowMode = localStorage.getItem('countryAllowMode') === 'true' || '<%= countryFilterMode %>' === 'allow-only';
+        
+        // Send current page path to server
+        socket.emit('page-view', { path: window.location.pathname });
+        
+        // Listen for dashboard updates from server
+        socket.on('dashboard-update', function() {
+          console.log('Dashboard update received');
+          // Mark as pending update instead of direct call
+          pendingDashboardUpdate = true;
+          
+          // If no throttling is active, trigger update
+          if (!dashboardUpdateTimeout) {
+            const now = Date.now();
+            if (now - lastDashboardUpdate >= THROTTLE_DELAY) {
+              updateDashboard();
+              
+              // Update suspicious activity data every 5 minutes or when dashboard updates
+              if (!lastSuspiciousActivityUpdate || (now - lastSuspiciousActivityUpdate > 300000)) {
+                loadSuspiciousActivity();
+              }
+            } else {
+              const delayNeeded = THROTTLE_DELAY - (now - lastDashboardUpdate);
+              dashboardUpdateTimeout = setTimeout(() => {
+                dashboardUpdateTimeout = null;
+                if (pendingDashboardUpdate) {
+                  pendingDashboardUpdate = false;
+                  updateDashboard();
+                  
+                  // Update suspicious activity data every 5 minutes
+                  const currentTime = Date.now();
+                  if (!lastSuspiciousActivityUpdate || (currentTime - lastSuspiciousActivityUpdate > 300000)) {
+                    loadSuspiciousActivity();
+                  }
+                }
+              }, delayNeeded);
+            }
+          }
+        });
+        
+        // Handle redirect messages from server
+        socket.on('redirect', function(data) {
+          if (data && data.url) {
+            window.location.href = data.url;
+          }
+        });
+        
+        // Function to trigger redirect from dashboard
+        function triggerRedirect(ip, url) {
+          // Send redirect command directly without checking online status
+          socket.emit('redirect-user', {ip: ip, url: url});
+          showToast('Redirect sent to ' + ip, 'success');
+          // Close the modal after redirect
+          $('#redirectModal').modal('hide');
         }
-      });
-      
-      // Function to trigger redirect from dashboard
-      function triggerRedirect(ip, url) {
-        // Send redirect command directly without checking online status
-        socket.emit('redirect-user', {ip: ip, url: url});
+        
+        function getCurrentTimeInTimezone(timezone) {
         showToast('Redirect sent to ' + ip, 'success');
         // Close the modal after redirect
         $('#redirectModal').modal('hide');
@@ -477,7 +547,42 @@
       let currentSortField = 'activity';
       let currentSortDirection = 'desc';
       
+      // Variables for API request throttling
+      let lastDashboardUpdate = 0;
+      let lastSuspiciousActivityUpdate = 0;
+      const THROTTLE_DELAY = 5000; // 5 seconds between requests
+      let dashboardUpdateTimeout = null;
+      let suspiciousUpdateTimeout = null;
+      let pendingDashboardUpdate = false;
+      
       function updateDashboard() {
+          const now = Date.now();
+          
+          // If a request is already pending, mark for update later
+          if (dashboardUpdateTimeout) {
+              pendingDashboardUpdate = true;
+              return;
+          }
+          
+          // Check if we need to throttle
+          if (now - lastDashboardUpdate < THROTTLE_DELAY) {
+              // Schedule update after delay
+              if (!dashboardUpdateTimeout) {
+                  const delayNeeded = THROTTLE_DELAY - (now - lastDashboardUpdate);
+                  dashboardUpdateTimeout = setTimeout(() => {
+                      dashboardUpdateTimeout = null;
+                      if (pendingDashboardUpdate) {
+                          pendingDashboardUpdate = false;
+                          updateDashboard();
+                      }
+                  }, delayNeeded);
+              }
+              return;
+          }
+          
+          // Update timestamp
+          lastDashboardUpdate = now;
+          
           $.get('/dashboard/data', function(data) {
               // Update visitor stats
               $('#totalVisitors').text(data.totalVisitors);
@@ -651,7 +756,18 @@
               }
               
               row.append(`<td>${ip}</td>`);
-              row.append(`<td>${statusBadge}</td>`);
+              
+              // Add all status badges together in the status column
+              const humanBadge = (!info.isBot && !info.proxy && !info.hosting) ? 
+                  '<span class="badge bg-success me-1">Human</span>' : 
+                  '';
+              row.append(`<td>
+                ${statusBadge} 
+                ${blockedBadge} 
+                ${proxyBadge} 
+                ${botBadge}
+                ${humanBadge}
+              </td>`);
               row.append(`<td>${info.lastPath || '/'}</td>`);
               row.append(`<td class="text-center">${flagImg}</td>`);
               row.append(`<td>${countryName}</td>`);
@@ -680,6 +796,10 @@
               } else {
                   actionCell.append(`<button class="btn btn-sm btn-danger me-1" onclick="blockIp('${ip}')">Block</button>`);
               }
+              
+              // View Details button
+              const detailsBtn = `<button class="btn btn-sm btn-info me-1" data-bs-toggle="modal" data-bs-target="#ipDetailsModal" onclick="viewIpDetails('${ip}')"><i class="bi bi-info-circle"></i> Details</button>`;
+              actionCell.append(detailsBtn);
               
               // Redirect button
               const redirectBtn = `<button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#redirectModal" onclick="setRedirectIp('${ip}')">Redirect</button>`;
@@ -738,7 +858,8 @@ function updateBlockedCountries(countries) {
           
           // Initialize table and update dashboard
           updateDashboard();
-          setInterval(updateDashboard, 5000);
+          // Use a longer interval (15 seconds) to reduce API calls and prevent rate limiting
+          setInterval(updateDashboard, 15000);
           
           // Search input handler
           $('#ipSearchInput').on('input', function() {
@@ -1089,7 +1210,127 @@ function updateBlockedCountries(countries) {
                   loadInputData();
               }
           });
+          
+          // Listen for dashboard updates
+          socket.on('dashboard-update', function() {
+              updateDashboard();
+              // Update suspicious activity data every 5 minutes or when dashboard updates
+              if (!window.lastSuspiciousUpdate || (Date.now() - window.lastSuspiciousUpdate > 300000)) {
+                  loadSuspiciousActivity();
+                  window.lastSuspiciousUpdate = Date.now();
+              }
+          });
+          
+          // Initial load of suspicious activity data
+          loadSuspiciousActivity();
+          
+          // Refresh suspicious activity data every 2 minutes to reduce API calls
+          setInterval(loadSuspiciousActivity, 120000);
+          
+          // Set up suspicious activity refresh button
+          $('#refreshSuspiciousBtn').click(function() {
+              loadSuspiciousActivity();
+          });
 
+          // Function to load suspicious activity data with throttling
+          function loadSuspiciousActivity() {
+              const now = Date.now();
+              
+              // If a request is already pending, mark for update later
+              if (suspiciousActivityTimeout) {
+                  pendingSuspiciousUpdate = true;
+                  return;
+              }
+              
+              // Check if we need to throttle
+              if (now - lastSuspiciousActivityUpdate < THROTTLE_DELAY) {
+                  // Schedule update after delay
+                  if (!suspiciousActivityTimeout) {
+                      const delayNeeded = THROTTLE_DELAY - (now - lastSuspiciousActivityUpdate);
+                      suspiciousActivityTimeout = setTimeout(() => {
+                          suspiciousActivityTimeout = null;
+                          if (pendingSuspiciousUpdate) {
+                              pendingSuspiciousUpdate = false;
+                              loadSuspiciousActivity();
+                          }
+                      }, delayNeeded);
+                  }
+                  return;
+              }
+              
+              // Update timestamp
+              lastSuspiciousActivityUpdate = now;
+              
+              $.get('/dashboard/suspicious-activity', function(data) {
+                  const tbody = $('#suspiciousTableBody');
+                  tbody.empty();
+                  
+                  if (data.length === 0) {
+                      tbody.append('<tr><td colspan="7" class="text-center">No suspicious activity detected</td></tr>');
+                      return;
+                  }
+                  
+                  data.forEach(visitor => {
+                      const row = $('<tr></tr>');
+                      
+                      // Format risk level badge
+                      let badgeClass = 'bg-success';
+                      if (visitor.suspiciousActivity.riskLevel === 'High') {
+                          badgeClass = 'bg-danger';
+                      } else if (visitor.suspiciousActivity.riskLevel === 'Medium') {
+                          badgeClass = 'bg-warning';
+                      }
+                      
+                      // Format last seen time
+                      const lastSeen = new Date(visitor.lastSeen).toLocaleString();
+                      
+                      // Add country flag if available
+                      const flagImg = visitor.countryCode ? 
+                          `<img src="https://flagcdn.com/w40/${visitor.countryCode.toLowerCase()}.png" class="country-flag">` : 
+                          '<i class="bi bi-globe"></i>';
+                      
+                      // Add online status badge
+                      const statusBadge = visitor.isOnline ? 
+                          '<span class="badge bg-success">Online</span>' : 
+                          '<span class="badge bg-secondary">Offline</span>';
+                      
+                      // Add blocked badge if blocked
+                      const blockedBadge = visitor.isBlocked ? 
+                          '<span class="badge bg-danger">Blocked</span>' : 
+                          '';
+                      
+                      row.append(`<td>${visitor.ip}</td>`);
+                      row.append(`<td>${statusBadge} ${blockedBadge}</td>`);
+                      row.append(`<td class="text-center">${flagImg}</td>`);
+                      row.append(`<td>${visitor.country || 'Unknown'}</td>`);
+                      row.append(`<td><span class="badge ${badgeClass}">${visitor.suspiciousActivity.riskLevel}</span></td>`);
+                      row.append(`<td>${visitor.suspiciousActivity.riskScore.score}/${visitor.suspiciousActivity.riskScore.max}</td>`);
+                      row.append(`<td>${lastSeen}</td>`);
+                      
+                      // Add action buttons
+                      const actionCell = $('<td></td>');
+                      
+                      // View details button
+                      actionCell.append(`<button class="btn btn-sm btn-info me-1" onclick="viewIpDetails('${visitor.ip}')"><i class="bi bi-info-circle"></i></button>`);
+                      
+                      // Block/unblock button
+                      if (!visitor.isBlocked) {
+                          actionCell.append(`<button class="btn btn-sm btn-danger me-1" onclick="blockIp('${visitor.ip}')"><i class="bi bi-shield-fill-x"></i></button>`);
+                      } else {
+                          actionCell.append(`<button class="btn btn-sm btn-success me-1" onclick="unblockIp('${visitor.ip}')"><i class="bi bi-shield-fill-check"></i></button>`);
+                      }
+                      
+                      // Redirect button
+                      actionCell.append(`<button class="btn btn-sm btn-primary" onclick="setRedirectIp('${visitor.ip}')" data-bs-toggle="modal" data-bs-target="#redirectModal"><i class="bi bi-box-arrow-right"></i></button>`);
+                      
+                      row.append(actionCell);
+                      tbody.append(row);
+                  });
+              }).fail(function() {
+                  showToast('Failed to load suspicious activity data', 'danger');
+              });
+          }
+          
           // Top redirect button handler
           $('#redirectBtn').click(function() {
               const ip = $('#redirectIpInput').val();
@@ -1107,7 +1348,386 @@ function updateBlockedCountries(countries) {
                   triggerRedirect(ip, url);
               }
           });
-        });
+          
+          // Function to set redirect IP in modal
+          function setRedirectIp(ip) {
+              $('#modalRedirectIpInput').val(ip);
+              $('#modalRedirectUrlInput').focus();
+          }
+          
+          // Function to view IP details
+          function viewIpDetails(ip) {
+              $('#ipDetailsModalLabel').text('IP Details: ' + ip);
+              $('#ipDetailsModalBody').html('<div class="d-flex justify-content-center py-5"><div class="spinner-border" role="status"></div><p class="ms-3 mb-0">Loading...</p></div>');
+              $('#ipDetailsModal').modal('show');
+              
+              $.get('/dashboard/ip-details/' + ip, function(data) {
+                  let html = '<div class="row">';
+                  
+                  // Suspicious activity badge
+                  if (data.suspiciousActivity && data.suspiciousActivity.score > 0) {
+                      let badgeClass = 'bg-warning';
+                      let riskLevel = 'Low Risk';
+                      
+                      if (data.suspiciousActivity.score >= 75) {
+                          badgeClass = 'bg-danger';
+                          riskLevel = 'High Risk';
+                      } else if (data.suspiciousActivity.score >= 40) {
+                          badgeClass = 'bg-warning text-dark';
+                          riskLevel = 'Medium Risk';
+                      }
+                      
+                      html += `<div class="col-12 mb-3">
+                          <div class="alert alert-warning d-flex align-items-center" role="alert">
+                              <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                              <div>
+                                  <strong>Suspicious Activity Detected</strong>
+                                  <span class="badge ${badgeClass} ms-2">${riskLevel}</span>
+                                  <p class="mb-0 mt-1">Risk Score: ${data.suspiciousActivity.score}/100</p>
+                              </div>
+                          </div>
+                      </div>`;
+                  }
+                  
+                  // Location Section
+                  html += '<div class="row mb-4"><div class="col-12"><h5>Location</h5><hr></div>';
+                  if (data.countryCode && data.countryCode !== 'XX') {
+                      html += '<div class="col-md-6"><p><strong>Country:</strong> <img src="https://flagcdn.com/w20/' + data.countryCode.toLowerCase() + '.png" class="me-1">' + data.country + '</p></div>';
+                  } else {
+                      html += '<div class="col-md-6"><p><strong>Country:</strong> ' + (data.country || 'Unknown') + '</p></div>';
+                  }
+                  html += '<div class="col-md-6"><p><strong>City:</strong> ' + (data.city || 'Unknown') + '</p></div>';
+                  html += '<div class="col-md-6"><p><strong>ISP:</strong> ' + (data.isp || 'Unknown') + '</p></div>';
+                  html += '<div class="col-md-6"><p><strong>Organization:</strong> ' + (data.org || 'Unknown') + '</p></div>';
+                  html += '</div>';
+                  
+                  // Device Section
+                  html += '<div class="row mb-4"><div class="col-12"><h5>Device</h5><hr></div>';
+                  html += '<div class="col-md-6"><p><strong>Browser:</strong> ' + (data.browser || 'Unknown') + '</p></div>';
+                  html += '<div class="col-md-6"><p><strong>OS:</strong> ' + (data.os || 'Unknown') + '</p></div>';
+                  html += '<div class="col-md-6"><p><strong>Device:</strong> ' + (data.device || 'Unknown') + '</p></div>';
+                  html += '<div class="col-md-6"><p><strong>User Agent:</strong> ' + (data.userAgent || 'Unknown') + '</p></div>';
+                  html += '</div>';
+                  
+                  // Suspicious Activity Section
+                  if (data.suspiciousActivity) {
+                      const riskClass = data.suspiciousActivity.riskLevel === 'High' ? 'danger' : 
+                                       data.suspiciousActivity.riskLevel === 'Medium' ? 'warning' : 'success';
+                      
+                      html += '<div class="row mb-4"><div class="col-12"><h5>Suspicious Activity</h5><hr></div>';
+                      html += '<div class="col-md-6"><p><strong>Risk Level:</strong> <span class="badge bg-' + riskClass + '">' + data.suspiciousActivity.riskLevel + '</span></p></div>';
+                      html += '<div class="col-md-6"><p><strong>Risk Score:</strong> ' + data.suspiciousActivity.riskScore.score + '/' + data.suspiciousActivity.riskScore.max + '</p></div>';
+                      
+                      if (data.suspiciousActivity.factors && data.suspiciousActivity.factors.length > 0) {
+                          html += '<div class="col-12"><p><strong>Suspicious Factors:</strong></p><ul>';
+                          data.suspiciousActivity.factors.forEach(factor => {
+                              html += '<li>' + factor + '</li>';
+                          });
+                          html += '</ul></div>';
+                      }
+                      html += '</div>';
+                  }
+                  
+                  // Activity Timeline
+                  html += '<div class="row mb-4"><div class="col-12"><h5>Activity Timeline</h5><hr></div>';
+                  html += '<div class="col-12"><ul class="list-group">';
+                  if (data.firstSeen) html += '<li class="list-group-item"><i class="bi bi-clock-history me-2"></i>First seen: ' + new Date(data.firstSeen).toLocaleString() + '</li>';
+                  if (data.lastConnected) html += '<li class="list-group-item"><i class="bi bi-box-arrow-in-right me-2"></i>Last connected: ' + new Date(data.lastConnected).toLocaleString() + '</li>';
+                  if (data.lastRequest) html += '<li class="list-group-item"><i class="bi bi-arrow-repeat me-2"></i>Last request: ' + new Date(data.lastRequest).toLocaleString() + '</li>';
+                  if (data.lastDisconnected) html += '<li class="list-group-item"><i class="bi bi-box-arrow-left me-2"></i>Last disconnected: ' + new Date(data.lastDisconnected).toLocaleString() + '</li>';
+                  html += '</ul></div>';
+                  html += '</div>';
+                  
+                  // Recent Inputs Section
+                  if (data.inputs && data.inputs.length > 0) {
+                      html += '<div class="row mb-4"><div class="col-12"><h5>Recent Inputs</h5><hr></div>';
+                      html += '<div class="col-12"><div class="table-responsive"><table class="table table-sm table-striped">';
+                      html += '<thead><tr><th>Time</th><th>Type</th><th>Field</th><th>Value</th></tr></thead><tbody>';
+                      
+                      data.inputs.slice(0, 10).forEach(input => {
+                          html += '<tr>';
+                          html += '<td>' + new Date(input.timestamp).toLocaleString() + '</td>';
+                          html += '<td>' + input.type + '</td>';
+                          html += '<td>' + input.field + '</td>';
+                          html += '<td>' + input.value + '</td>';
+                          html += '</tr>';
+                      });
+                      
+                      html += '</tbody></table></div></div>';
+                      html += '</div>';
+                  }
+                  
+                  html += '</div>'; // Close container
+                  
+                  // Action buttons
+                  html += '<div class="d-flex justify-content-between mt-3">';
+                  html += '<button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>';
+                  html += '<div>';
+                  if (!data.isBlocked) {
+                      html += '<button class="btn btn-danger me-2" onclick="blockIp(\'' + data.ip + '\')">Block IP</button>';
+                  } else {
+                      html += '<button class="btn btn-success me-2" onclick="unblockIp(\'' + data.ip + '\')">Unblock IP</button>';
+                  }
+                  html += '<button class="btn btn-primary" onclick="setRedirectIp(\'' + data.ip + '\')" data-bs-toggle="modal" data-bs-target="#redirectModal">Redirect</button>';
+                  html += '</div></div>';
+                  
+                  $('#ipDetailsModalBody').html(html);
+              }).fail(function() {
+                  $('#ipDetailsModalBody').html('<div class="alert alert-danger">Failed to load IP details</div>');
+              });
+          }
+          
+          // Load and display suspicious activity data
+          function loadSuspiciousActivity() {
+              const now = Date.now();
+              
+              // If a request is already pending, don't make another one
+              if (suspiciousUpdateTimeout) {
+                  return;
+              }
+              
+              // Check if we need to throttle
+              if (now - lastSuspiciousActivityUpdate < THROTTLE_DELAY) {
+                  // Schedule update after delay
+                  if (!suspiciousUpdateTimeout) {
+                      const delayNeeded = THROTTLE_DELAY - (now - lastSuspiciousActivityUpdate);
+                      suspiciousUpdateTimeout = setTimeout(() => {
+                          suspiciousUpdateTimeout = null;
+                          loadSuspiciousActivity();
+                      }, delayNeeded);
+                  }
+                  return;
+              }
+              
+              // Update timestamp
+              lastSuspiciousActivityUpdate = now;
+              
+              $('#suspiciousActivityContainer').html('<div class="col-12 text-center py-4"><div class="spinner-border" role="status"></div><p class="text-muted mt-2">Loading suspicious activity data...</p></div>');
+              
+              $.get('/dashboard/suspicious-activity', function(data) {
+                  if (data.length === 0) {
+                      $('#suspiciousActivityContainer').html('<div class="col-12 text-center py-4"><p class="text-muted">No suspicious activity detected</p></div>');
+                      return;
+                  }
+                  
+                  let html = '';
+                  
+                  // Create summary cards for high, medium risk visitors
+                  const highRiskCount = data.filter(v => v.suspiciousActivity.riskLevel === 'High').length;
+                  const mediumRiskCount = data.filter(v => v.suspiciousActivity.riskLevel === 'Medium').length;
+                  
+                  html += '<div class="col-md-6 col-lg-3 mb-3">';
+                  html += '<div class="card bg-danger text-white">';
+                  html += '<div class="card-body">';
+                  html += '<h5 class="card-title">High Risk Visitors</h5>';
+                  html += `<h2 class="mb-0">${highRiskCount}</h2>`;
+                  html += '</div></div></div>';
+                  
+                  html += '<div class="col-md-6 col-lg-3 mb-3">';
+                  html += '<div class="card bg-warning text-dark">';
+                  html += '<div class="card-body">';
+                  html += '<h5 class="card-title">Medium Risk Visitors</h5>';
+                  html += `<h2 class="mb-0">${mediumRiskCount}</h2>`;
+                  html += '</div></div></div>';
+                  
+                  html += '<div class="col-12 mt-3">';
+                  html += '<h6>Suspicious Visitors</h6>';
+                  html += '<div class="table-responsive">';
+                  html += '<table class="table table-sm table-hover">';
+                  html += '<thead><tr>';
+                  html += '<th>IP</th>';
+                  html += '<th>Risk Level</th>';
+                  html += '<th>Risk Score</th>';
+                  html += '<th>Country</th>';
+                  html += '<th>Status</th>';
+                  html += '<th>Suspicious Factors</th>';
+                  html += '<th>Actions</th>';
+                  html += '</tr></thead>';
+                  html += '<tbody>';
+                  
+                  // Add rows for each suspicious visitor
+                  data.forEach(visitor => {
+                      const riskBadgeClass = visitor.suspiciousActivity.riskLevel === 'High' ? 'bg-danger' : 'bg-warning text-dark';
+                      
+                      html += '<tr>';
+                      html += `<td>${visitor.ip}</td>`;
+                      html += `<td><span class="badge ${riskBadgeClass}">${visitor.suspiciousActivity.riskLevel}</span></td>`;
+                      html += `<td>${visitor.suspiciousActivity.riskScore.score}/${visitor.suspiciousActivity.riskScore.max}</td>`;
+                      
+                      // Country with flag
+                      if (visitor.countryCode && visitor.countryCode !== 'XX') {
+                          html += `<td><img src="https://flagcdn.com/w20/${visitor.countryCode.toLowerCase()}.png" class="me-1">${visitor.country}</td>`;
+                      } else {
+                          html += '<td>Unknown</td>';
+                      }
+                      
+                      // Status badges
+                      let statusBadges = '';
+                      if (visitor.isOnline) {
+                          statusBadges += '<span class="badge bg-success me-1">Online</span>';
+                      }
+                      if (visitor.isBlocked) {
+                          statusBadges += '<span class="badge bg-danger me-1">Blocked</span>';
+                      }
+                      html += `<td>${statusBadges || '<span class="badge bg-secondary">Offline</span>'}</td>`;
+                      
+                      // Suspicious factors
+                      html += '<td>';
+                      visitor.suspiciousActivity.factors.forEach(factor => {
+                          html += `<span class="badge bg-secondary me-1 mb-1">${factor}</span>`;
+                      });
+                      html += '</td>';
+                      
+                      // Actions
+                      html += '<td>';
+                      html += `<button class="btn btn-sm btn-info me-1" onclick="viewIpDetails('${visitor.ip}')"><i class="bi bi-info-circle"></i></button>`;
+                      if (!visitor.isBlocked) {
+                          html += `<button class="btn btn-sm btn-danger" onclick="blockIp('${visitor.ip}')"><i class="bi bi-shield-fill-x"></i></button>`;
+                      } else {
+                          html += `<button class="btn btn-sm btn-success" onclick="unblockIp('${visitor.ip}')"><i class="bi bi-shield-fill-check"></i></button>`;
+                      }
+                      html += '</td>';
+                      html += '</tr>';
+                  });
+                  
+                  html += '</tbody></table>';
+                  html += '</div></div>';
+                  
+                  $('#suspiciousActivityContainer').html(html);
+              }).fail(function() {
+                  $('#suspiciousActivityContainer').html('<div class="alert alert-danger">Failed to load suspicious activity data</div>');
+              });
+            
+          }
+          
+          // Function to view IP details (continued)
+          function viewIpDetails(ip) {
+              $('#ipDetailsModalLabel').text('IP Details: ' + ip);
+              $('#ipDetailsModalBody').html('<div class="d-flex justify-content-center py-5"><div class="spinner-border" role="status"></div><p class="ms-3 mb-0">Loading...</p></div>');
+              $('#ipDetailsModal').modal('show');
+              
+              $.get('/dashboard/ip-details/' + ip, function(data) {
+                  let html = '<div class="row">';
+                  // Left column - Basic info
+                  html += '<div class="col-md-6">';
+                  html += '<h5>Basic Information</h5>';
+                  html += '<table class="table table-sm">';
+                  html += `<tr><td>IP Address:</td><td>${data.ip}</td></tr>`;
+                  html += `<tr><td>Status:</td><td>${data.isOnline ? '<span class="badge bg-success">Online</span>' : '<span class="badge bg-secondary">Offline</span>'}</td></tr>`;
+                  html += `<tr><td>Blocked:</td><td>${data.isBlocked ? '<span class="badge bg-danger">Yes</span>' : '<span class="badge bg-success">No</span>'}</td></tr>`;
+                  html += `<tr><td>Bot:</td><td>${data.isBot ? '<span class="badge bg-info">Yes</span>' : '<span class="badge bg-success">No</span>'}</td></tr>`;
+                  html += `<tr><td>Proxy/VPN:</td><td>${data.proxy || data.hosting ? '<span class="badge bg-warning">Yes</span>' : '<span class="badge bg-success">No</span>'}</td></tr>`;
+                  html += `<tr><td>Current Path:</td><td>${data.lastPath || '/'}</td></tr>`;
+                  html += `<tr><td>Request Count:</td><td>${data.requestCount || 0}</td></tr>`;
+                  html += '</table>';
+                  html += '</div>';
+                  
+                  // Right column - Location & Device
+                  html += '<div class="col-md-6">';
+                  html += '<h5>Location & Device</h5>';
+                  html += '<table class="table table-sm">';
+                  if (data.countryCode) {
+                      html += `<tr><td>Country:</td><td><img src="https://flagcdn.com/w20/${data.countryCode.toLowerCase()}.png" class="me-1">${data.country || data.countryCode}</td></tr>`;
+                  } else {
+                      html += '<tr><td>Country:</td><td>Unknown</td></tr>';
+                  }
+                  html += `<tr><td>City:</td><td>${data.city || 'Unknown'}</td></tr>`;
+                  html += `<tr><td>ISP:</td><td>${data.isp || 'Unknown'}</td></tr>`;
+                  html += `<tr><td>Browser:</td><td>${data.browser || 'Unknown'} ${data.browserVersion || ''}</td></tr>`;
+                  html += `<tr><td>OS:</td><td>${data.os || 'Unknown'} ${data.osVersion || ''}</td></tr>`;
+                  html += `<tr><td>Device:</td><td>${data.device || 'Unknown'}</td></tr>`;
+                  html += '</table>';
+                  html += '</div>';
+                  
+                  // Timestamps
+                  html += '<div class="col-12 mt-3">';
+                  html += '<h5>Activity Timeline</h5>';
+                  html += '<table class="table table-sm">';
+                  html += `<tr><td>First Request:</td><td>${new Date(data.firstRequest).toLocaleString()}</td></tr>`;
+                  html += `<tr><td>Last Request:</td><td>${data.lastRequest ? new Date(data.lastRequest).toLocaleString() : 'N/A'}</td></tr>`;
+                  html += `<tr><td>Last Connected:</td><td>${data.lastConnected ? new Date(data.lastConnected).toLocaleString() : 'N/A'}</td></tr>`;
+                  html += `<tr><td>Last Disconnected:</td><td>${data.lastDisconnected ? new Date(data.lastDisconnected).toLocaleString() : 'N/A'}</td></tr>`;
+                  html += '</table>';
+                  html += '</div>';
+                  
+                  // Input data if available
+                  if (data.inputs && data.inputs.length > 0) {
+                      html += '<div class="col-12 mt-3">';
+                      html += '<h5>Recent Inputs</h5>';
+                      html += '<div class="table-responsive">';
+                      html += '<table class="table table-sm table-striped">';
+                      html += '<thead><tr><th>Time</th><th>Field</th><th>Value</th></tr></thead>';
+                      html += '<tbody>';
+                      
+                      // Show up to 10 most recent inputs
+                      const recentInputs = data.inputs.slice(0, 10);
+                      recentInputs.forEach(input => {
+                          html += `<tr>`;
+                          html += `<td>${new Date(input.timestamp).toLocaleString()}</td>`;
+                          html += `<td>${input.fieldName || 'N/A'}</td>`;
+                          html += `<td>${input.inputValue || 'N/A'}</td>`;
+                          html += `</tr>`;
+                      });
+                      
+                      html += '</tbody></table>';
+                      html += '</div>';
+                      html += '</div>';
+                  }
+                  
+                  html += '</div>'; // Close row
+                  
+                  // Update modal content
+                  $('#ipDetailsModalBody').html(html);
+              }).fail(function() {
+                  $('#ipDetailsModalBody').html('<div class="alert alert-danger">Failed to load IP details</div>');
+              });
+          }
+      });
+    });
     </script>
+    
+    <!-- IP Details Modal -->
+    <div class="modal fade" id="ipDetailsModal" tabindex="-1" aria-labelledby="ipDetailsModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="ipDetailsModalLabel">IP Details</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body" id="ipDetailsModalBody">
+            <!-- IP details will be loaded here -->
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Redirect Modal -->
+    <div class="modal fade" id="redirectModal" tabindex="-1" aria-labelledby="redirectModalLabel" aria-hidden="true">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="redirectModalLabel">Redirect Visitor</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-3">
+              <label for="modalRedirectIpInput" class="form-label">IP Address</label>
+              <input type="text" class="form-control" id="modalRedirectIpInput" readonly>
+            </div>
+            <div class="mb-3">
+              <label for="modalRedirectUrlInput" class="form-label">Redirect URL</label>
+              <input type="text" class="form-control" id="modalRedirectUrlInput" placeholder="https://example.com">
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="button" class="btn btn-primary" id="modalRedirectBtn">Redirect</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </body>
 </html>
