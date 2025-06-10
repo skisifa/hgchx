@@ -94,6 +94,17 @@
   </head>
   <body class="bg-light">
     <!-- Toast container for notifications -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+      <div id="notificationToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="toast-header">
+          <strong class="me-auto">Notification</strong>
+          <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+        <div class="toast-body" id="toastMessage">
+          <!-- Toast message will be inserted here -->
+        </div>
+      </div>
+    </div>
     <div class="toast-container position-fixed top-0 end-0 p-3" id="toastContainer"></div>
     
     <div class="container-fluid py-4">
@@ -199,7 +210,7 @@
               class="form-check-input"
               type="checkbox"
               id="proxyDetectionToggle"
-              <% proxyDetectionEnabled?'checked':'' %>
+              <%= proxyDetectionEnabled ? 'checked' : '' %>
             />
             <label class="form-check-label" for="proxyDetectionToggle">Proxy Detection</label>
           </div>
@@ -382,9 +393,36 @@
       </div>
 
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/socket.io/client-dist/socket.io.min.js"></script>
+    
+    <script>
+      // Function to show toast notifications
+      function showToast(message, type = 'info') {
+        const toastId = 'toast-' + Date.now();
+        const toastHtml = `
+          <div id="${toastId}" class="toast align-items-center text-white bg-${type}" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+              <div class="toast-body">
+                ${message}
+              </div>
+              <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+          </div>
+        `;
+        
+        $('#toastContainer').append(toastHtml);
+        const toastElement = document.getElementById(toastId);
+        const toast = new bootstrap.Toast(toastElement, { delay: 3000 });
+        toast.show();
+        
+        // Remove toast from DOM after it's hidden
+        toastElement.addEventListener('hidden.bs.toast', function() {
+          $(toastElement).remove();
+        });
+      }
+    </script>
     <script>
     // Initialize socket.io connection globally
     const socket = io();
@@ -1317,16 +1355,45 @@ function updateBlockedCountries(countries) {
           });
           
           $('#countryModeToggle').change(function() {
-              countryAllowMode = $(this).is(':checked');
-              // Save to localStorage
-              localStorage.setItem('countryAllowMode', countryAllowMode);
-              updateCountryModeUI();
+              const newMode = $(this).is(':checked');
+              const oldMode = countryAllowMode;
+              
+              // Disable toggle during transition to prevent multiple clicks
+              $(this).prop('disabled', true);
+              
+              // Show loading state
+              $('#countryModeLabel').html('<small><i class="fas fa-spinner fa-spin"></i> Updating...</small>');
               
               // Send the mode change to server
-              $.post('/dashboard/toggle-country-mode', { allowMode: countryAllowMode }, function(data) {
+              $.post('/dashboard/toggle-country-mode', { allowMode: newMode }, function(data) {
                   if (data.success) {
-                      console.log('Country mode toggled:', countryAllowMode ? 'Allow Only' : 'Block');
+                      // Update local state only after successful server update
+                      countryAllowMode = newMode;
+                      
+                      // Save to localStorage
+                      localStorage.setItem('countryAllowMode', countryAllowMode);
+                      
+                      // Update UI
+                      updateCountryModeUI();
+                      
+                      // Show success message
+                      const modeText = countryAllowMode ? 'Allow Only Mode' : 'Block Mode';
+                      showToast(`Country filtering switched to ${modeText}`, 'success');
+                      
+                      // Update country list with the new data from server
+                      updateBlockedCountries(data.countries);
+                  } else {
+                      // Revert toggle if server update failed
+                      $(this).prop('checked', oldMode);
+                      showToast('Failed to update country mode', 'danger');
                   }
+              }).fail(function() {
+                  // Revert toggle if server request failed
+                  $(this).prop('checked', oldMode);
+                  showToast('Server error while updating country mode', 'danger');
+              }).always(function() {
+                  // Re-enable toggle
+                  $('#countryModeToggle').prop('disabled', false);
               });
           });
           
@@ -1346,28 +1413,99 @@ function updateBlockedCountries(countries) {
               }
           }
           
+          // Function to update the blocked/allowed countries list in the UI
+          function updateBlockedCountries(countries) {
+              // Clear the current list
+              $('#blockedCountriesList').empty();
+              
+              // Check if countries is defined and is an array
+              if (!countries || !Array.isArray(countries) || countries.length === 0) {
+                  $('#blockedCountriesList').html('<p class="text-muted">No countries ' + 
+                      (countryAllowMode ? 'allowed' : 'blocked') + ' yet</p>');
+                  return;
+              }
+              
+              // Add each country to the list
+              countries.forEach(function(countryCode) {
+                  if (!countryCode) return; // Skip empty values
+                  
+                  // Create badge with country code and remove button
+                  const badgeClass = countryAllowMode ? 'bg-success' : 'bg-danger';
+                  const badge = $(`
+                      <div class="badge ${badgeClass} country-badge" data-country="${countryCode}">
+                          <span>${countryCode.toUpperCase()}</span>
+                          <button type="button" class="btn-close btn-close-white ms-1 unblock-country-btn" 
+                              data-country="${countryCode}" aria-label="Remove"></button>
+                      </div>
+                  `);
+                  
+                  $('#blockedCountriesList').append(badge);
+              });
+          }
+          
           $('#blockCountryBtn').click(function() {
-              const countryCode = $('#countryCodeInput').val().toUpperCase();
-              if (countryCode) {
+              const countryCode = $('#countryCodeInput').val().toUpperCase().trim();
+              if (countryCode && countryCode.length === 2) {
                   const endpoint = countryAllowMode ? '/dashboard/allow-country' : '/dashboard/block-country';
+                  
+                  // Show loading state
+                  const originalText = $('#countryBtnText').text();
+                  $('#countryBtnText').text('Processing...');
+                  $('#blockCountryBtn').prop('disabled', true);
+                  
                   $.post(endpoint, { countryCode }, function(data) {
                       if (data.success) {
                           updateBlockedCountries(data.countries);
                           $('#countryCodeInput').val('');
-                          console.log(countryAllowMode ? 'Country allowed:' : 'Country blocked:', countryCode);
+                          showToast(countryAllowMode ? 
+                              `Country ${countryCode} added to allowed list` : 
+                              `Country ${countryCode} added to blocked list`, 'success');
+                      } else {
+                          showToast('Failed to update country list', 'danger');
                       }
+                  }).fail(function() {
+                      showToast('Server error while updating country list', 'danger');
+                  }).always(function() {
+                      // Restore button state
+                      $('#countryBtnText').text(originalText);
+                      $('#blockCountryBtn').prop('disabled', false);
                   });
+              } else {
+                  showToast('Please enter a valid 2-letter country code', 'warning');
               }
           });
 
           $(document).on('click', '.unblock-country-btn', function() {
               const countryCode = $(this).data('country');
               const endpoint = countryAllowMode ? '/dashboard/disallow-country' : '/dashboard/unblock-country';
+              
+              // Find the badge element and add a loading class
+              const badge = $(this).closest('.badge');
+              badge.addClass('opacity-50');
+              $(this).prop('disabled', true);
+              
               $.post(endpoint, { countryCode }, function(data) {
                   if (data.success) {
-                      updateBlockedCountries(data.countries);
-                      console.log(countryAllowMode ? 'Country disallowed:' : 'Country unblocked:', countryCode);
+                      // Animate removal of the badge
+                      badge.fadeOut(300, function() {
+                          // After fade out, update the entire list
+                          updateBlockedCountries(data.countries);
+                      });
+                      
+                      showToast(countryAllowMode ? 
+                          `Country ${countryCode} removed from allowed list` : 
+                          `Country ${countryCode} removed from blocked list`, 'success');
+                  } else {
+                      // Restore the badge if there was an error
+                      badge.removeClass('opacity-50');
+                      $(this).prop('disabled', false);
+                      showToast('Failed to update country list', 'danger');
                   }
+              }).fail(function() {
+                  // Restore the badge if there was an error
+                  badge.removeClass('opacity-50');
+                  $(this).prop('disabled', false);
+                  showToast('Server error while updating country list', 'danger');
               });
           });
               

