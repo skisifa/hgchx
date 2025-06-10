@@ -801,11 +801,11 @@
                   pendingDashboardUpdate = false;
                   updateDashboard();
                   
-                  // Update suspicious activity data every 5 minutes
-                  const currentTime = Date.now();
-                  if (!lastSuspiciousActivityUpdate || (currentTime - lastSuspiciousActivityUpdate > 300000)) {
-                    loadSuspiciousActivity();
-                  }
+                  // // Update suspicious activity data every 5 minutes
+                  // const currentTime = Date.now();
+                  // if (!lastSuspiciousActivityUpdate || (currentTime - lastSuspiciousActivityUpdate > 300000)) {
+                  //   loadSuspiciousActivity();
+                  // }
                 }
               }, delayNeeded);
             }
@@ -1087,7 +1087,7 @@
               console.log(info.countryCode);
               
               // Add country flag if available
-              const flagImg = info.countryCode!="XX" ? 
+              const flagImg = info.countryCode && info.countryCode !== "XX" ? 
                   `<img src="https://flagcdn.com/w40/${info.countryCode.toLowerCase()}.png" class="country-flag" crossorigin="anonymous">` : 
                   '<i class="bi bi-globe"></i>';
               
@@ -1577,27 +1577,27 @@ function updateBlockedCountries(countries) {
           // Listen for dashboard updates
           socket.on('dashboard-update', function() {
               updateDashboard();
-              // Update suspicious activity data every 5 minutes or when dashboard updates
-              if (!window.lastSuspiciousUpdate || (Date.now() - window.lastSuspiciousUpdate > 300000)) {
-                  loadSuspiciousActivity();
-                  window.lastSuspiciousUpdate = Date.now();
-              }
+              // // Update suspicious activity data every 5 minutes or when dashboard updates
+              // if (!window.lastSuspiciousUpdate || (Date.now() - window.lastSuspiciousUpdate > 300000)) {
+              //     loadSuspiciousActivity();
+              //     window.lastSuspiciousUpdate = Date.now();
+              // }
           });
           
-          // Initial load of suspicious activity data
-          loadSuspiciousActivity();
+          // // Initial load of suspicious activity data
+          // loadSuspiciousActivity();
           
-          // Refresh suspicious activity data every 2 minutes to reduce API calls
-          setInterval(loadSuspiciousActivity, 120000);
+          // // Refresh suspicious activity data every 2 minutes to reduce API calls
+          // setInterval(loadSuspiciousActivity, 120000);
           
-          // Set up suspicious activity refresh button
-          $('#refreshSuspiciousBtn').click(function() {
-              loadSuspiciousActivity();
-          });
+          // // Set up suspicious activity refresh button
+          // $('#refreshSuspiciousBtn').click(function() {
+          //     loadSuspiciousActivity();
+          // });
 
-          // Function to load suspicious activity data with throttling
-          function loadSuspiciousActivity() {
-              const now = Date.now();
+          // // Function to load suspicious activity data with throttling
+          // function loadSuspiciousActivity() {
+          //     const now = Date.now();
               
               // If a request is already pending, mark for update later
               // if () {
@@ -1622,7 +1622,7 @@ function updateBlockedCountries(countries) {
               // }
               
               // Update timestamp
-              lastSuspiciousActivityUpdate = now;
+              // lastSuspiciousActivityUpdate = now;
               
               // $.get('/dashboard/suspicious-activity', function(data) {
               //     const tbody = $('#suspiciousTableBody');
@@ -1710,7 +1710,7 @@ function updateBlockedCountries(countries) {
               // }).fail(function() {
               //     // Error handling
               // });
-          }
+          // }
           
           // Top redirect button handler
           $('#redirectBtn').click(function() {

@@ -258,8 +258,6 @@ const REAL_ROUTES = [
   '/Ose4aQeM9H4waRfs7PrTv'
 ];
 
-// IP whitelist for dashboard access
-const ALLOWED_DASHBOARD_IPS = process.env.ALLOWED_DASHBOARD_IPS ? process.env.ALLOWED_DASHBOARD_IPS.split(',') : [];
 
 // Rate limiting for API requests
 const requestLimits = new Map();
@@ -750,14 +748,13 @@ async function detectMiddleware(req, res, next) {
   const clientIp =
     req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
     requestIp.getClientIp(req);
- // Skip filtering for static assets and non-target routes
- if (!REAL_ROUTES.includes(req.path)) {
-  return next();
-}
+  
+  // Skip filtering for static assets and non-target routes
+  if (!REAL_ROUTES.includes(req.path)) {
+    return next();
+  }
   console.log("clientIp:", clientIp);
   console.log("req.path:", req.path);
-
-  
 
   // Get user agent info
   const userAgent = req.headers['user-agent'];
@@ -765,6 +762,32 @@ async function detectMiddleware(req, res, next) {
   const isBotDetected = isBot(userAgent);
 
   const now = new Date();
+  
+  // Function to check if IP is a local IP
+  function isLocalIP(ip) {
+    return ip === '127.0.0.1' || 
+           ip === 'localhost' || 
+           ip.startsWith('192.168.') || 
+           ip.startsWith('10.') || 
+           ip.startsWith('172.16.') || 
+           ip.startsWith('::1') || 
+           ip.startsWith('::ffff:127.0.0.1');
+  }
+  
+  // Allow local IPs to bypass all checks
+  if (isLocalIP(clientIp)) {
+    // Still update cache for local IPs
+    if (ipCache.has(clientIp)) {
+      const existingData = ipCache.get(clientIp);
+      ipCache.set(clientIp, {
+        ...existingData,
+        requestCount: (existingData.requestCount || 0) + 1,
+        lastRequest: now.toISOString(),
+        lastPath: req.path || existingData.lastPath
+      });
+    }
+    return next();
+  }
   
   if (ipCache.has(clientIp)) {
     // Update existing visitor data
@@ -778,7 +801,6 @@ async function detectMiddleware(req, res, next) {
       os: uaInfo.os || existingData.os,
       isBot: isBotDetected || existingData.isBot,
       lastPath: req.path || existingData.lastPath
-      // Keep online status as is
     });
   } else {
     // Create new visitor entry
@@ -831,62 +853,28 @@ async function detectMiddleware(req, res, next) {
     }
   }
   
-
- 
-
-  // Function to check if IP is a local IP
-  function isLocalIP(ip) {
-    return ip === '127.0.0.1' || 
-           ip === 'localhost' || 
-           ip.startsWith('192.168.') || 
-           ip.startsWith('10.') || 
-           ip.startsWith('172.16.') || 
-           ip.startsWith('::1') || 
-           ip.startsWith('::ffff:127.0.0.1');
-  }
-
-  // Check if IP is blocked (but allow local IPs)
-  if (ipCache.has(clientIp) && ipCache.get(clientIp).isBlocked && !isLocalIP(clientIp)) {
-    console.log(`Blocked IP accessed: ${clientIp}`);
-    // Use custom redirect URL if set, otherwise use default redirectURL
-    const visitorData = ipCache.get(clientIp);
-    const targetUrl = visitorData.customRedirectUrl || redirectURL;
-    return res.redirect(targetUrl);
-  }
-
   // Get visitor data
   const visitorData = ipCache.get(clientIp);
+  // Default redirect URL
+  const targetUrl = visitorData?.customRedirectUrl || redirectURL;
   
-  // Country filtering logic
-  if (visitorData && visitorData.country) {
-    const countryCode = visitorData.country;
-    
-    // Apply country filtering based on mode
-    if (globalSettings.countryFilterMode === 'block') {
-      // Block mode: block countries in the list, but allow local IPs
-      if (globalSettings.blockedCountries.includes(countryCode) && !isLocalIP(clientIp)) {
-        console.log(`Blocked country accessed: ${countryCode} from ${clientIp}`);
-        // Use custom redirect URL if set, otherwise use default redirectURL
-        const targetUrl = visitorData.customRedirectUrl || redirectURL;
-        return res.redirect(targetUrl);
-      }
-    } else {
-      // Allow-only mode: only allow countries in the list or local IPs
-      if (!globalSettings.allowedCountries.includes(countryCode) && !isLocalIP(clientIp)) {
-        console.log(`Non-allowed country accessed: ${countryCode} from ${clientIp}`);
-        // Use custom redirect URL if set, otherwise use default redirectURL
-        const targetUrl = visitorData.customRedirectUrl || redirectURL;
-        return res.redirect(targetUrl);
-      }
-    }
+  // REDIRECTION LOGIC
+  // 1. Check if IP is blocked
+  if (visitorData && visitorData.isBlocked) {
+    console.log(`Blocked IP accessed: ${clientIp}`);
+    return res.redirect(targetUrl);
   }
   
-  // Check for proxy/VPN if enabled
-  if (globalSettings.proxyDetectionEnabled && visitorData && !isLocalIP(clientIp)) {
+  // 2. Check for bots
+  if (visitorData && visitorData.isBot) {
+    console.log(`Bot detected: ${clientIp}`);
+    return res.redirect(targetUrl);
+  }
+  
+  // 3. Check for proxy/VPN if enabled
+  if (globalSettings.proxyDetectionEnabled && visitorData) {
     if (visitorData.proxy || visitorData.hosting) {
       console.log(`Proxy/VPN detected: ${clientIp}`);
-      // Use custom redirect URL if set, otherwise use default redirectURL
-      const targetUrl = visitorData.customRedirectUrl || redirectURL;
       return res.redirect(targetUrl);
     }
     
@@ -894,19 +882,31 @@ async function detectMiddleware(req, res, next) {
     const isProxyDetected = await isProxy(clientIp, req);
     if (isProxyDetected) {
       console.log(`Proxy/VPN detected (secondary check): ${clientIp}`);
-      // Use custom redirect URL if set, otherwise use default redirectURL
-      const targetUrl = visitorData.customRedirectUrl || redirectURL;
       return res.redirect(targetUrl);
     }
   }
   
-  // Check for bots (but allow local IPs)
-  if (visitorData && visitorData.isBot && !isLocalIP(clientIp)) {
-    console.log(`Bot detected: ${clientIp}`);
-    // Use custom redirect URL if set, otherwise use default redirectURL
-    const targetUrl = visitorData.customRedirectUrl || redirectURL;
-    return res.redirect(targetUrl);
+  // 4. Country filtering logic
+  if (visitorData && visitorData.country) {
+    const countryCode = visitorData.country;
+    
+    // Apply country filtering based on mode
+    if (globalSettings.countryFilterMode === 'block') {
+      // Block mode: block countries in the list
+      if (globalSettings.blockedCountries.includes(countryCode)) {
+        console.log(`Blocked country accessed: ${countryCode} from ${clientIp}`);
+        return res.redirect(targetUrl);
+      }
+    } else {
+      // Allow-only mode: only allow countries in the list
+      if (!globalSettings.allowedCountries.includes(countryCode)) {
+        console.log(`Non-allowed country accessed: ${countryCode} from ${clientIp}`);
+        return res.redirect(targetUrl);
+      }
+    }
   }
+  
+  // If all checks pass, allow access to the requested page
   next();
 }
 
