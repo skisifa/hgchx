@@ -891,30 +891,40 @@ async function detectMiddleware(req, res, next) {
   
   // 4. Country filtering logic
   if (visitorData) {
-    const countryCode = visitorData.country;
+    // Get country code from visitor data - could be in country or countryCode property
+    const countryCode = visitorData.country || visitorData.countryCode;
+    
+    // Standardize to uppercase for consistent comparison
+    const formattedCountryCode = countryCode ? countryCode.toUpperCase() : null;
+    
+    // Debug log to help troubleshoot
+    console.log(`Country filtering check for IP ${clientIp}: Country=${formattedCountryCode}, Mode=${globalSettings.countryFilterMode}`);
     
     // Apply country filtering based on mode
     if (globalSettings.countryFilterMode === 'block') {
       // Block mode: block countries in the list
-      if (countryCode && globalSettings.blockedCountries && globalSettings.blockedCountries.includes(countryCode)) {
-        console.log(`Blocked country accessed: ${countryCode} from ${clientIp}`);
+      if (formattedCountryCode && globalSettings.blockedCountries && 
+          globalSettings.blockedCountries.includes(formattedCountryCode)) {
+        console.log(`Blocked country accessed: ${formattedCountryCode} from ${clientIp}`);
         return res.redirect(targetUrl);
       }
       // If no country is blocked or country is unknown, allow access
       // This is the default behavior for block mode
+      console.log(`Country ${formattedCountryCode || 'Unknown'} allowed (not in block list)`);
     } else {
       // Allow-only mode: only allow countries in the list
       // First check if we have any allowed countries configured
       if (globalSettings.allowedCountries && globalSettings.allowedCountries.length > 0) {
         // If country is unknown or not in the allowed list, block access
-        if (!countryCode || !globalSettings.allowedCountries.includes(countryCode)) {
-          console.log(`Non-allowed country accessed: ${countryCode || 'Unknown'} from ${clientIp}`);
+        if (!formattedCountryCode || !globalSettings.allowedCountries.includes(formattedCountryCode)) {
+          console.log(`Non-allowed country accessed: ${formattedCountryCode || 'Unknown'} from ${clientIp}`);
           return res.redirect(targetUrl);
         }
         // Country is in the allowed list, so allow access
+        console.log(`Country ${formattedCountryCode} allowed (in allowed list)`);
       } else {
         // No countries are explicitly allowed, so block all
-        console.log(`No allowed countries configured, blocking access from ${countryCode || 'Unknown'} (${clientIp})`);
+        console.log(`No allowed countries configured, blocking access from ${formattedCountryCode || 'Unknown'} (${clientIp})`);
         return res.redirect(targetUrl);
       }
     }
