@@ -748,185 +748,212 @@ function parseUserAgent(userAgent) {
 
 // Visitor tracking middleware - add this before other middleware
 async function detectMiddleware(req, res, next) {
-  const clientIp =
-    req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
-    requestIp.getClientIp(req);
+  // Get accurate client IP with fallbacks
+  const clientIp = (
+    req.headers["cf-connecting-ip"] || // Cloudflare
+    req.headers["x-real-ip"] || // Nginx
+    req.headers["x-forwarded-for"]?.split(",")[0].trim() || // Standard proxy header
+    req.headers["x-client-ip"] || // Some CDNs
+    requestIp.getClientIp(req) || // Fallback
+    req.socket.remoteAddress // Last resort
+  );
   
-  // Skip filtering for static assets and non-target routes
-  if (!REAL_ROUTES.includes(req.path)) {
-    return next();
-  }
-  console.log("clientIp:", clientIp);
-  console.log("req.path:", req.path);
-
-  // Get user agent info
-  const userAgent = req.headers['user-agent'];
-  const uaInfo = parseUserAgent(userAgent || '');
-  const isBotDetected = isBot(userAgent);
-
-  const now = new Date();
-  
-  // Function to check if IP is a local IP
-  function isLocalIP(ip) {
+  // Helper functions for cleaner code
+  const isLocalIP = (ip) => {
     return ip === '127.0.0.1' || 
            ip === 'localhost' || 
            ip.startsWith('192.168.') || 
            ip.startsWith('10.') || 
            ip.startsWith('172.16.') || 
+           ip.startsWith('172.17.') || 
+           ip.startsWith('172.18.') || 
+           ip.startsWith('172.19.') || 
+           ip.startsWith('172.2') || 
+           ip.startsWith('172.30.') || 
+           ip.startsWith('172.31.') || 
            ip.startsWith('::1') || 
-           ip.startsWith('::ffff:127.0.0.1');
-  }
+           ip.startsWith('::ffff:127.0.0.1') || 
+           ip.startsWith('fc00:') || // Unique local addresses
+           ip.startsWith('fd');
+  };
   
-  // Allow local IPs to bypass all checks
-  if (isLocalIP(clientIp)) {
-    // Still update cache for local IPs
-    if (ipCache.has(clientIp)) {
-      const existingData = ipCache.get(clientIp);
-      ipCache.set(clientIp, {
-        ...existingData,
-        requestCount: (existingData.requestCount || 0) + 1,
-        lastRequest: now.toISOString(),
-        lastPath: req.path || existingData.lastPath
-      });
-    }
+  const isSystemPath = (path) => {
+    return path.startsWith('/dashboard') || 
+           path.startsWith('/socket.io') || 
+           path.startsWith('/api') || 
+           path.startsWith('/public') || 
+           path.startsWith('/assets') || 
+           path.startsWith('/css') || 
+           path.startsWith('/js') || 
+           path.startsWith('/img') || 
+           path.startsWith('/favicon');
+  };
+  
+  // Skip tracking for non-target routes, system paths, or local IPs
+  if (!REAL_ROUTES.includes(req.path) || isSystemPath(req.path) || isLocalIP(clientIp)) {
     return next();
   }
   
+  // Performance optimization: Start the IP API request early
+  let ipInfoPromise;
+  if (!ipCache.has(clientIp)) {
+    ipInfoPromise = axios.get(`http://ip-api.com/json/${clientIp}`)
+      .catch(error => {
+        console.error(`Error fetching IP data for ${clientIp}:`, error.message);
+        return { data: {} }; // Return empty data on error
+      });
+  }
+  
+  // Parse user agent
+  const now = new Date();
+  const userAgent = req.headers['user-agent'] || '';
+  const uaInfo = parseUserAgent(userAgent);
+  const isBotDetected = isBot(userAgent);
+  
+  // Log visitor tracking start with timestamp
+  console.log(`[${now.toISOString()}] Tracking visitor - IP: ${clientIp}, Path: ${req.path}`);
+  
+  // Update or create visitor data
+  let visitorData;
   if (ipCache.has(clientIp)) {
     // Update existing visitor data
     const existingData = ipCache.get(clientIp);
-    ipCache.set(clientIp, {
+    visitorData = {
       ...existingData,
       requestCount: (existingData.requestCount || 0) + 1,
-      lastRequest: now.toISOString(),
+      lastRequest: now,
       userAgent: userAgent || existingData.userAgent,
       browser: uaInfo.browser || existingData.browser,
       os: uaInfo.os || existingData.os,
       isBot: isBotDetected || existingData.isBot,
-      lastPath: req.path || existingData.lastPath
-    });
+      lastPath: req.path
+    };
+    ipCache.set(clientIp, visitorData);
+    
+    // Emit update for real-time dashboard if significant change
+    if (visitorData.requestCount % 5 === 0 || // Every 5 requests
+        (now - new Date(existingData.lastRequest)) > 5 * 60 * 1000) { // Or after 5 minutes
+      io.emit('visitor-update', { ip: clientIp, data: visitorData });
+    }
   } else {
     // Create new visitor entry
-    // Fetch geo and proxy data for new IPs
     try {
-      const ipInfo = await axios.get(`http://ip-api.com/json/${clientIp}`);
+      // Wait for IP info that we started fetching earlier
+      const ipInfo = await ipInfoPromise;
       const ipData = ipInfo.data;
       
-      ipCache.set(clientIp, {
+      visitorData = {
         ip: clientIp,
         firstSeen: now,
         lastRequest: now,
         lastPath: req.path,
         requestCount: 1,
-        userAgent: userAgent || null,
-        browser: uaInfo.browser || null,
-        os: uaInfo.os || null,
-        country: ipData.countryCode || null,
-        city: ipData.city || null,
-        isp: ipData.isp || null,
+        userAgent: userAgent,
+        browser: uaInfo.browser,
+        os: uaInfo.os,
+        country: ipData.countryCode,
+        countryCode: ipData.countryCode, // Standardize property name
+        city: ipData.city,
+        isp: ipData.isp,
         proxy: ipData.proxy || false,
         hosting: ipData.hosting || false,
         mobile: ipData.mobile || false,
-        isBot: isBotDetected || false,
-        isOnline: false, // Will be set to true when socket connects
+        isBot: isBotDetected,
+        isOnline: true,
         isBlocked: false,
-        lastPath: req.path || null
-      });
+        referrer: req.headers.referer || null,
+        timezone: ipData.timezone || null
+      };
       
-      // Emit dashboard update to all connected clients
+      ipCache.set(clientIp, visitorData);
+      
+      // Emit new visitor event for real-time dashboard
+      io.emit('new-visitor', { ip: clientIp, data: visitorData });
       io.emit('dashboard-update');
-    } catch (error) {
-      console.error(`Error fetching IP data for ${clientIp}:`, error.message);
       
-      // Still add to cache even if IP API fails
-      ipCache.set(clientIp, {
+      console.log(`New visitor from ${visitorData.country || 'Unknown'}: ${clientIp}`);
+    } catch (error) {
+      // This should never happen because we handle errors in the promise
+      console.error(`Unexpected error processing visitor ${clientIp}:`, error);
+      visitorData = {
         ip: clientIp,
         firstSeen: now,
         lastRequest: now,
         lastPath: req.path,
         requestCount: 1,
-        userAgent: userAgent || null,
-        browser: uaInfo.browser || null,
-        os: uaInfo.os || null,
-        isBot: isBotDetected || false,
-        isOnline: false,
-        isBlocked: false,
-        lastPath: req.path || null
-      });
+        userAgent: userAgent,
+        browser: uaInfo.browser,
+        os: uaInfo.os,
+        isBot: isBotDetected,
+        isOnline: true,
+        isBlocked: false
+      };
+      ipCache.set(clientIp, visitorData);
     }
   }
   
-  // Get visitor data
-  const visitorData = ipCache.get(clientIp);
-  // Default redirect URL
-  const targetUrl = visitorData?.customRedirectUrl || redirectURL;
+  // REDIRECTION LOGIC - with early returns for performance
+  const targetUrl = visitorData.customRedirectUrl || redirectURL;
   
-  // REDIRECTION LOGIC
   // 1. Check if IP is blocked
-  if (visitorData && visitorData.isBlocked) {
-    console.log(`Blocked IP accessed: ${clientIp}`);
+  if (visitorData.isBlocked) {
+    console.log(`⛔ Blocked IP accessed: ${clientIp}`);
     return res.redirect(targetUrl);
   }
   
   // 2. Check for bots
-  if (visitorData && visitorData.isBot) {
-    console.log(`Bot detected: ${clientIp}`);
+  if (visitorData.isBot) {
+    console.log(`🤖 Bot detected: ${clientIp}`);
     return res.redirect(targetUrl);
   }
   
   // 3. Check for proxy/VPN if enabled
-  if (globalSettings.proxyDetectionEnabled && visitorData) {
+  if (globalSettings.proxyDetectionEnabled) {
     if (visitorData.proxy || visitorData.hosting) {
-      console.log(`Proxy/VPN detected: ${clientIp}`);
+      console.log(`🔒 Proxy/VPN detected: ${clientIp}`);
       return res.redirect(targetUrl);
     }
     
-    // Double-check with proxy detection function
+    // Only perform secondary proxy check if primary didn't detect
     const isProxyDetected = await isProxy(clientIp, req);
     if (isProxyDetected) {
-      console.log(`Proxy/VPN detected (secondary check): ${clientIp}`);
+      // Update cache with this new information
+      visitorData.proxy = true;
+      ipCache.set(clientIp, visitorData);
+      
+      console.log(`🔒 Proxy/VPN detected (secondary check): ${clientIp}`);
       return res.redirect(targetUrl);
     }
   }
   
   // 4. Country filtering logic
-  if (visitorData) {
-    // Get country code from visitor data - could be in country or countryCode property
-    const countryCode = visitorData.country || visitorData.countryCode;
-    
-    // Standardize to uppercase for consistent comparison
-    const formattedCountryCode = countryCode ? countryCode.toUpperCase() : null;
-    
-    // Debug log to help troubleshoot
-    console.log(`Country filtering check for IP ${clientIp}: Country=${formattedCountryCode}, Mode=${globalSettings.countryFilterMode}`);
-    
-    // Apply country filtering based on mode
-    if (globalSettings.countryFilterMode === 'block') {
-      // Block mode: block countries in the list
-      if (formattedCountryCode && globalSettings.blockedCountries && 
-          globalSettings.blockedCountries.includes(formattedCountryCode)) {
-        console.log(`Blocked country accessed: ${formattedCountryCode} from ${clientIp}`);
+  const countryCode = visitorData.country || visitorData.countryCode;
+  const formattedCountryCode = countryCode ? countryCode.toUpperCase() : null;
+  
+  // Apply country filtering based on mode
+  if (globalSettings.countryFilterMode === 'block') {
+    // Block mode: block countries in the list
+    if (formattedCountryCode && 
+        globalSettings.blockedCountries && 
+        globalSettings.blockedCountries.includes(formattedCountryCode)) {
+      console.log(`🚫 Blocked country accessed: ${formattedCountryCode} from ${clientIp}`);
+      return res.redirect(targetUrl);
+    }
+    // Country not in block list, allow access
+  } else if (globalSettings.countryFilterMode === 'allow-only') {
+    // Allow-only mode: only allow countries in the list
+    if (globalSettings.allowedCountries && globalSettings.allowedCountries.length > 0) {
+      // If country is unknown or not in the allowed list, block access
+      if (!formattedCountryCode || !globalSettings.allowedCountries.includes(formattedCountryCode)) {
+        console.log(`🚫 Non-allowed country accessed: ${formattedCountryCode || 'Unknown'} from ${clientIp}`);
         return res.redirect(targetUrl);
       }
-      // If no country is blocked or country is unknown, allow access
-      // This is the default behavior for block mode
-      console.log(`Country ${formattedCountryCode || 'Unknown'} allowed (not in block list)`);
+      // Country is in the allowed list, so allow access
+      console.log(`✅ Country ${formattedCountryCode} allowed (in allowed list)`);
     } else {
-      // Allow-only mode: only allow countries in the list
-      // First check if we have any allowed countries configured
-      if (globalSettings.allowedCountries && globalSettings.allowedCountries.length > 0) {
-        // If country is unknown or not in the allowed list, block access
-        if (!formattedCountryCode || !globalSettings.allowedCountries.includes(formattedCountryCode)) {
-          console.log(`Non-allowed country accessed: ${formattedCountryCode || 'Unknown'} from ${clientIp}`);
-          return res.redirect(targetUrl);
-        }
-        // Country is in the allowed list, so allow access
-        console.log(`Country ${formattedCountryCode} allowed (in allowed list)`);
-      } else {
-        // No countries are explicitly allowed, so block all
-        console.log(`No allowed countries configured, blocking access from ${formattedCountryCode || 'Unknown'} (${clientIp})`);
-        return res.redirect(targetUrl);
-      }
+      // No countries are explicitly allowed, so block all
+      console.log(`🚫 No allowed countries configured, blocking access from ${formattedCountryCode || 'Unknown'} (${clientIp})`);
+      return res.redirect(targetUrl);
     }
   }
   
