@@ -1,5 +1,50 @@
 require('dotenv').config();
-const path = require("path");
+const originalPath = require("path");
+
+// Create a safer version of the path module
+const path = Object.create(originalPath);
+
+// Helper function to safely check if a value is a string
+function isString(value) {
+  return typeof value === 'string' || value instanceof String;
+}
+
+// Helper function to safely check if a path starts with a prefix
+function safePathStartsWith(pathStr, prefix) {
+  if (!isString(pathStr)) {
+    console.log(`Warning: path is not a string: ${typeof pathStr}`, pathStr);
+    return false;
+  }
+  return pathStr.startsWith(prefix);
+}
+
+// Helper function to get a valid string path or default
+function getValidPath(pathStr, defaultPath = '/') {
+  return isString(pathStr) ? pathStr : defaultPath;
+}
+
+// Patch String.prototype.startsWith to be safe with non-strings
+const originalStartsWith = String.prototype.startsWith;
+String.prototype.startsWith = function(searchString, position) {
+  try {
+    return originalStartsWith.call(this, searchString, position);
+  } catch (error) {
+    console.error('Error in startsWith:', error);
+    return false;
+  }
+};
+
+// Patch global path object to make it safer
+const originalPathStartsWith = path.startsWith;
+path.startsWith = function(pathStr, prefix) {
+  return safePathStartsWith(pathStr, prefix);
+};
+
+// Add a safe version of path operations
+path.safeStartsWith = safePathStartsWith;
+path.getValidPath = getValidPath;
+path.isString = isString;
+
 const express = require("express");
 const requestIp = require("request-ip");
 var session = require('express-session');
