@@ -45,6 +45,64 @@ path.safeStartsWith = safePathStartsWith;
 path.getValidPath = getValidPath;
 path.isString = isString;
 
+// Safe parseUserAgent function to handle the error in the deployed code
+function safeParseUserAgent(userAgent, pathStr) {
+  try {
+    // This is a fallback implementation since we don't have the original function
+    // It will be used if the original parseUserAgent returns undefined
+    const defaultResult = {
+      browser: 'Unknown',
+      browserVersion: 'Unknown',
+      os: 'Unknown',
+      osVersion: 'Unknown',
+      device: 'Unknown',
+      isBot: false
+    };
+    
+    // If there's a parseUserAgent function defined elsewhere, this will be overridden
+    if (typeof parseUserAgent === 'function') {
+      const result = parseUserAgent(userAgent, pathStr);
+      // If result is undefined or missing browser property, return default
+      if (!result || typeof result.browser === 'undefined') {
+        console.log('Warning: parseUserAgent returned undefined or invalid result');
+        return defaultResult;
+      }
+      return result;
+    }
+    
+    return defaultResult;
+  } catch (error) {
+    console.error('Error in parseUserAgent:', error);
+    return {
+      browser: 'Unknown',
+      browserVersion: 'Unknown',
+      os: 'Unknown',
+      osVersion: 'Unknown',
+      device: 'Unknown',
+      isBot: false
+    };
+  }
+}
+
+// Override global parseUserAgent if it exists
+if (typeof parseUserAgent !== 'undefined') {
+  const originalParseUserAgent = parseUserAgent;
+  global.parseUserAgent = function(userAgent, pathStr) {
+    try {
+      const result = originalParseUserAgent(userAgent, pathStr);
+      if (!result || typeof result.browser === 'undefined') {
+        return safeParseUserAgent(userAgent, pathStr);
+      }
+      return result;
+    } catch (error) {
+      console.error('Error in original parseUserAgent:', error);
+      return safeParseUserAgent(userAgent, pathStr);
+    }
+  };
+} else {
+  global.parseUserAgent = safeParseUserAgent;
+}
+
 const express = require("express");
 const requestIp = require("request-ip");
 var session = require('express-session');
