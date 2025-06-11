@@ -1,78 +1,73 @@
 /**
- * Global redirect handler to ensure proper cleanup before navigation
- * This prevents modal backdrop issues when redirecting
+ * Redirect Handler Script
+ * Simple handler for redirecting visitors from dashboard
  */
 
-// Global function to forcefully clean up modal artifacts
-window.forceCleanModals = function() {
-  console.log('Forcing modal cleanup');
+/**
+ * Performs a safe redirect to the specified URL with aggressive modal cleanup
+ * - Aggressively removes all modal backdrops
+ * - Resets all body styles
+ * - Performs the redirect with a delay to ensure cleanup completes
+ * @param {string} url - The URL to redirect to
+ * @returns {boolean} - Whether the redirect was initiated
+ */
+function safeRedirect(url) {
+  console.log('Redirect handler: Redirecting to:', url);
   
-  // 1. Use jQuery if available (more reliable for Bootstrap modals)
+  // Force close any open modals first
   if (typeof $ !== 'undefined') {
     try {
-      // Hide all modals properly
-      $('.modal').modal('hide');
-      
-      // Force remove all modal backdrops
-      $('.modal-backdrop').remove();
-      
-      // Reset body classes and styles
-      $('body').removeClass('modal-open');
-      $('body').css({
-        'overflow': '',
-        'padding-right': ''
-      });
-      
-      console.log('jQuery modal cleanup complete');
+      if ($.fn && $.fn.modal) {
+        $('.modal').modal('hide');
+      }
     } catch (e) {
-      console.error('jQuery modal cleanup error:', e);
+      console.log('Bootstrap modal not available:', e);
     }
+    // Remove modal backdrops with jQuery
+    $('.modal-backdrop').remove();
   }
   
-  // 2. Always do vanilla JS cleanup as well (as a backup)
-  try {
-    // Force remove all modal backdrops
-    document.querySelectorAll('.modal-backdrop').forEach(function(el) {
-      document.body.removeChild(el);
+  // Aggressive cleanup of modal backdrops with multiple methods
+  function cleanupModals() {
+    // Method 1: Direct removal
+    const modalBackdrops = document.querySelectorAll('.modal-backdrop');
+    modalBackdrops.forEach(backdrop => {
+      backdrop.classList.remove('show');
+      backdrop.remove();
     });
     
-    // Reset all modals
-    document.querySelectorAll('.modal').forEach(function(el) {
-      el.classList.remove('show');
-      el.style.display = 'none';
-      el.setAttribute('aria-hidden', 'true');
-    });
+    // Method 2: Remove via jQuery if available
+    if (typeof $ !== 'undefined') {
+      $('.modal-backdrop').remove();
+    }
     
-    // Reset body
+    // Method 3: Remove via direct DOM manipulation
+    document.querySelectorAll('.modal-backdrop').forEach(el => el.parentNode.removeChild(el));
+    
+    // Reset all body styles
     document.body.classList.remove('modal-open');
     document.body.style.overflow = '';
     document.body.style.paddingRight = '';
-    
-    // Create a style tag to forcefully hide modal backdrops
-    const style = document.createElement('style');
-    style.innerHTML = '.modal-backdrop { display: none !important; }';
-    document.head.appendChild(style);
-    
-    console.log('Vanilla JS modal cleanup complete');
-  } catch (e) {
-    console.error('Vanilla JS modal cleanup error:', e);
+    document.body.style.position = '';
+    document.body.style.height = '';
+    document.body.style.width = '';
   }
-};
-
-// Global function to safely navigate to a new URL with proper cleanup
-window.safeRedirect = function(url) {
-  if (!url) return;
   
-  console.log('Safe redirect initiated to:', url);
+  // Clean up immediately
+  cleanupModals();
   
-  // Force clean all modal artifacts
-  window.forceCleanModals();
+  // Clean up again after a short delay
+  setTimeout(cleanupModals, 50);
   
-  // Redirect after a short delay to ensure cleanup completes
-  setTimeout(function() {
-    // Clean one more time right before redirecting
-    window.forceCleanModals();
-    console.log('Executing redirect to:', url);
+  // Perform the redirect with a longer delay to ensure cleanup completes
+  setTimeout(() => {
+    // Final cleanup before navigation
+    cleanupModals();
     window.location.href = url;
   }, 200);
-};
+  
+  return true;
+}
+
+// Make the function available globally
+window.safeRedirect = safeRedirect;

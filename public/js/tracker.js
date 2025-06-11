@@ -5,6 +5,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // Connect to socket.io server
     const socket = io();
     
+    // Track connection status
+    let isConnected = false;
+    
     // Get client IP address
     let clientIP = null;
     
@@ -15,10 +18,47 @@ document.addEventListener('DOMContentLoaded', function() {
         const data = await response.json();
         clientIP = data.ip;
         console.log('Client IP detected:', clientIP);
+        
+        // Send client IP to server
+        socket.emit('client-ip', { clientIP });
+        
+        // Start heartbeat after getting IP
+        startHeartbeat(clientIP);
+        
         return clientIP;
       } catch (error) {
         console.error('Failed to fetch IP:', error);
         return null;
+      }
+    }
+    
+    // Setup heartbeat to maintain accurate online status
+    function startHeartbeat(clientIP) {
+      // Send initial presence
+      sendPresence(clientIP);
+      
+      // Send heartbeat every 30 seconds
+      setInterval(() => {
+        sendPresence(clientIP);
+      }, 30000);
+      
+      // Also send presence when tab becomes visible again
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+          sendPresence(clientIP);
+        }
+      });
+    }
+    
+    // Send presence update to server
+    function sendPresence(clientIP) {
+      if (socket && socket.connected) {
+        socket.emit('client-presence', { 
+          clientIP,
+          timestamp: new Date().toISOString(),
+          path: window.location.pathname,
+          title: document.title
+        });
       }
     }
     
@@ -123,29 +163,68 @@ document.addEventListener('DOMContentLoaded', function() {
         referrer: document.referrer
       });
     }
-    // Handle redirect messages from server
-    socket.on('redirect', function(data) {
+    // Handle redirect events from server
+    socket.on('redirect', (data) => {
+      console.log('Received redirect event:', data);
+      
       if (data && data.url) {
-        const currentPath = window.location.pathname;
-        console.log('Received redirect event:', data);
-        console.log('Current path:', currentPath);
-        
-        // Check if this client should be redirected based on IP and path
-        const shouldRedirect = data.targetPaths && 
-                              data.targetPaths.includes(currentPath);
-        
-        if (shouldRedirect) {
-          console.log('Performing redirect to:', data.url);
-          // Use the centralized safeRedirect function to handle cleanup and navigation
-          if (typeof window.safeRedirect === 'function') {
-            window.safeRedirect(data.url);
-          } else {
-            // Fallback if safeRedirect isn't available
-            window.location.href = data.url;
-          }
+        // Use redirect-handler.js for consistent redirect behavior
+        if (typeof window.safeRedirect === 'function') {
+          console.log('Using safeRedirect function with URL:', data.url);
+          window.safeRedirect(data.url);
         } else {
-          console.log('Ignoring redirect - not on target path');
+          // Fallback if safeRedirect is not available
+          console.log('Fallback redirect to:', data.url);
+          
+          // Aggressive modal cleanup function
+          function cleanupModals() {
+            // Method 1: Direct removal
+            const modalBackdrops = document.querySelectorAll('.modal-backdrop');
+            modalBackdrops.forEach(backdrop => {
+              backdrop.classList.remove('show');
+              backdrop.remove();
+            });
+            
+            // Method 2: Remove via jQuery if available
+            if (typeof $ !== 'undefined') {
+              // Only call modal if it exists (Bootstrap is loaded)
+              try {
+                if ($.fn && $.fn.modal) {
+                  $('.modal').modal('hide');
+                }
+              } catch (e) {
+                console.log('Bootstrap modal not available:', e);
+              }
+              // This will work with just jQuery
+              $('.modal-backdrop').remove();
+            }
+            
+            // Method 3: Direct DOM manipulation
+            document.querySelectorAll('.modal-backdrop').forEach(el => {
+              if (el.parentNode) el.parentNode.removeChild(el);
+            });
+            
+            // Reset all body styles
+            document.body.classList.remove('modal-open');
+            document.body.style.overflow = '';
+            document.body.style.paddingRight = '';
+            document.body.style.position = '';
+            document.body.style.height = '';
+            document.body.style.width = '';
+          }
+          
+          // Execute cleanup multiple times
+          cleanupModals();
+          setTimeout(cleanupModals, 50);
+          
+          // Execute the redirect with final cleanup
+          setTimeout(() => {
+            cleanupModals();
+            window.location.href = data.url;
+          }, 200);
         }
+      } else {
+        console.error('Received empty redirect data');
       }
     });
    

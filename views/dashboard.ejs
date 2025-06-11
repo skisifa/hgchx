@@ -854,40 +854,72 @@
         
       
         
-        // Function to trigger redirect from dashboard
+        /**
+         * Trigger a redirect for a specific IP address with aggressive modal cleanup
+         * @param {string} ip - The IP address to redirect
+         * @param {string} url - The URL to redirect to
+         */
         function triggerRedirect(ip, url) {
-          // First force clean any modal artifacts
-          if (typeof window.forceCleanModals === 'function') {
-            window.forceCleanModals();
+          // Basic validation
+          if (!ip || !url) {
+            if (!ip) showToast('Error: IP address is required', 'danger');
+            if (!url) showToast('Error: Redirect URL is required', 'danger');
+            return;
           }
           
-          // Send redirect command directly without checking online status
-          socket.emit('redirect-user', {ip: ip, url: url});
-          showToast('Redirect sent to ' + ip, 'success');
+          // Log the redirect attempt
+          console.log('Triggering redirect for IP:', ip, 'to URL:', url);
           
-          // Close the modal properly
+          // Force close the modal properly first
           $('#redirectModal').modal('hide');
           
-          // Force clean again after a short delay
-          setTimeout(function() {
-            if (typeof window.forceCleanModals === 'function') {
-              window.forceCleanModals();
-            }
-          }, 100);
+          // Aggressive cleanup function for modal elements
+          function cleanupModals() {
+            // Method 1: Direct removal
+            const modalBackdrops = document.querySelectorAll('.modal-backdrop');
+            modalBackdrops.forEach(backdrop => {
+              backdrop.classList.remove('show');
+              backdrop.remove();
+            });
+            
+            // Method 2: jQuery removal
+            $('.modal-backdrop').remove();
+            
+            // Method 3: Direct DOM manipulation
+            document.querySelectorAll('.modal-backdrop').forEach(el => {
+              if (el.parentNode) el.parentNode.removeChild(el);
+            });
+            
+            // Reset all body styles
+            document.body.classList.remove('modal-open');
+            document.body.style.overflow = '';
+            document.body.style.paddingRight = '';
+            document.body.style.position = '';
+          }
+          
+          // Clean up immediately
+          cleanupModals();
+          
+          // Clean up again after a short delay
+          setTimeout(cleanupModals, 50);
+          
+          // Send redirect command to server
+          socket.emit('redirect-user', { ip, url });
+          
+          // Notify user
+          showToast('Redirect sent to ' + ip + ' → ' + url, 'success');
+          
+          // Final cleanup after a delay
+          setTimeout(cleanupModals, 100);
         }
         
         function getCurrentTimeInTimezone(timezone) {
-        showToast('Redirect sent to ' + ip, 'success');
-        // Close the modal after redirect
-        $('#redirectModal').modal('hide');
-      }
-      function getCurrentTimeInTimezone(timezone) {
           try {
               return new Date().toLocaleString('en-US', { timeZone: timezone });
           } catch (e) {
               return 'Unknown';
           }
-      }
+        }
       
       // Function to show toast notifications
       function showToast(message, type = 'info') {
@@ -1873,14 +1905,37 @@ function updateBlockedCountries(countries) {
           $('#modalRedirectBtn').click(function() {
               const ip = $('#modalRedirectIpInput').val();
               const url = $('#modalRedirectUrlInput').val();
+              
+              console.log('Modal redirect clicked with IP:', ip, 'URL:', url);
+              
               if (ip && url) {
                   triggerRedirect(ip, url);
+              } else {
+                  console.error('Missing IP or URL for redirect');
+                  if (!ip) showToast('Error: IP address is required', 'danger');
+                  if (!url) showToast('Error: Redirect URL is required', 'danger');
               }
           });
           
-          // Function to set redirect IP in modal
+          /**
+           * Set the IP address in the redirect modal and prepare the form
+           * @param {string} ip - The IP address to set for redirection
+           */
           function setRedirectIp(ip) {
+              // Set the hidden input value
               $('#modalRedirectIpInput').val(ip);
+              
+              // Update the visible display text
+              $('#redirectIpDisplay strong').text(ip);
+              
+              // Ensure a URL is selected (first option by default)
+              const defaultUrl = $('#modalRedirectUrlInput option:first').val();
+              $('#modalRedirectUrlInput').val(defaultUrl);
+              
+              // Log for debugging
+              console.log('Redirect modal prepared for IP:', ip, 'with default URL:', defaultUrl);
+              
+              // Focus the URL dropdown for easy selection
               $('#modalRedirectUrlInput').focus();
           }
           

