@@ -22,6 +22,54 @@ const VisitorTracker = (function() {
   const queuedEvents = [];
 
   /**
+   * Fetch and cache client location data
+   * @returns {Promise<Object>} Location data
+   */
+  async function fetchLocationData() {
+    try {
+      // Check if we have cached location data that's still valid
+      const cachedLocationData = localStorage.getItem('clientLocationData');
+      const cacheTime = localStorage.getItem('clientLocationDataTimestamp');
+      
+      if (cachedLocationData && cacheTime && (Date.now() - parseInt(cacheTime)) < 24 * 60 * 60 * 1000) {
+        // Use cached data if it's less than 24 hours old
+        return JSON.parse(cachedLocationData);
+      }
+      
+      // Try to get location data from ipinfo.io
+      const response = await fetch('https://ipinfo.io/json');
+      if (!response.ok) throw new Error('Failed to fetch location data');
+      
+      const data = await response.json();
+      const locationData = {
+        country: data.country || 'Unknown',
+        city: data.city || 'Unknown',
+        org: data.org || 'Unknown',
+        isp: data.org || 'Unknown', // Use org as ISP if not available
+        proxy: false, // We don't have this info from ipinfo.io
+        region: data.region || 'Unknown',
+        timezone: data.timezone || 'Unknown'
+      };
+      
+      // Cache the location data
+      localStorage.setItem('clientLocationData', JSON.stringify(locationData));
+      localStorage.setItem('clientLocationDataTimestamp', Date.now().toString());
+      
+      console.log('Location data fetched and cached:', locationData);
+      return locationData;
+    } catch (error) {
+      console.error('Error fetching location data:', error);
+      return {
+        country: 'Unknown',
+        city: 'Unknown',
+        org: 'Unknown',
+        isp: 'Unknown',
+        proxy: false
+      };
+    }
+  }
+
+  /**
    * Initialize the tracker
    */
   function init() {
@@ -82,13 +130,28 @@ const VisitorTracker = (function() {
     // Set up event listeners
     setupSocketListeners();
     
-    // Get client IP immediately, but wait for socket connection before tracking
-    getClientIP().then(ip => {
+    // Get client IP and location data, then start tracking
+    Promise.all([
+      getClientIP(),
+      fetchLocationData()
+    ]).then(([ip, locationData]) => {
       console.log('Client IP obtained:', ip);
+      console.log('Location data obtained:', locationData);
       
-      // If socket is already connected, start tracking
+      // Store the location data for later use
+      window.visitorLocationData = locationData;
+      
+      // If socket is already connected, start tracking and send metadata
       if (isConnected) {
         console.log('Socket already connected, starting tracking');
+        
+        // Send visitor metadata with location data
+        socket.emit('visitor-metadata', {
+          clientIP: ip,
+          ...locationData,
+          timestamp: new Date().toISOString()
+        });
+        
         trackCurrentPage();
         setupInputTracking();
         setupNavigationTracking();
@@ -97,14 +160,22 @@ const VisitorTracker = (function() {
         // Wait for connection before tracking
         socket.once('connect', () => {
           console.log('Socket connected, now starting tracking');
+          
+          // Send visitor metadata with location data
+          socket.emit('visitor-metadata', {
+            clientIP: ip,
+            ...locationData,
+            timestamp: new Date().toISOString()
+          });
+          
           trackCurrentPage();
           setupInputTracking();
           setupNavigationTracking();
         });
       }
     }).catch(err => {
-      console.error('Error getting client IP:', err);
-      // Still set up tracking even if IP detection fails
+      console.error('Error getting client data:', err);
+      // Still set up tracking even if data fetching fails
       trackCurrentPage();
       setupInputTracking();
       setupNavigationTracking();
@@ -668,6 +739,25 @@ const VisitorTracker = (function() {
     // Get timezone
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Unknown';
     
+    // Get cached location data if available
+    const cachedLocationData = localStorage.getItem('clientLocationData');
+    let locationData = null;
+    
+    if (cachedLocationData) {
+      try {
+        locationData = JSON.parse(cachedLocationData);
+        // Check if cache is still valid (less than 24 hours old)
+        const cacheTime = localStorage.getItem('clientLocationDataTimestamp');
+        if (cacheTime && (Date.now() - parseInt(cacheTime)) > 24 * 60 * 60 * 1000) {
+          // Cache expired, will be refreshed on next request
+          locationData = null;
+        }
+      } catch (e) {
+        console.error('Error parsing cached location data:', e);
+        locationData = null;
+      }
+    }
+    
     // Return comprehensive client info
     return {
       browser: {
@@ -693,6 +783,13 @@ const VisitorTracker = (function() {
         path: window.location.pathname,
         title: document.title,
         referrer: document.referrer || 'Direct'
+      },
+      location: locationData || {
+        country: 'Unknown',
+        city: 'Unknown',
+        org: 'Unknown',
+        isp: 'Unknown',
+        proxy: false
       }
     };
   }
@@ -706,7 +803,8 @@ const VisitorTracker = (function() {
     // Get detailed client information
     const clientInfo = getClientInfo();
     
-    socket.emit('client-presence', { 
+    // Prepare detailed visitor data
+    const visitorData = { 
       clientIP: clientIP,
       timestamp: new Date().toISOString(),
       path: clientInfo.pageInfo.path,
@@ -715,8 +813,20 @@ const VisitorTracker = (function() {
       os: clientInfo.os,
       device: clientInfo.device,
       timezone: clientInfo.timezone,
-      referrer: clientInfo.pageInfo.referrer
-    });
+      referrer: clientInfo.pageInfo.referrer,
+      // Add additional fields for visitor metadata
+      country: clientInfo.location?.country || 'Unknown',
+      city: clientInfo.location?.city || 'Unknown',
+      org: clientInfo.location?.org || 'Unknown',
+      isp: clientInfo.location?.isp || 'Unknown',
+      proxy: clientInfo.location?.proxy || false
+    };
+    
+    // Send visitor data to server
+    socket.emit('client-presence', visitorData);
+    
+    // Also send as visitor-metadata to ensure it's properly stored
+    socket.emit('visitor-metadata', visitorData);
   }
   
   /**

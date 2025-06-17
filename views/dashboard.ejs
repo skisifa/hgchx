@@ -1081,19 +1081,170 @@
         let allowedCountries = [];
         let proxyDetectionEnabled = true;
         
+        /**
+         * Show a toast notification
+         * @param {string} message - The message to display
+         * @param {string} type - The type of toast (success, error, warning, info)
+         */
+        function showToast(message, type = 'info') {
+            // Create toast container if it doesn't exist
+            if ($('#toast-container').length === 0) {
+                $('body').append('<div id="toast-container" class="position-fixed bottom-0 end-0 p-3" style="z-index: 9999;"></div>');
+            }
+            
+            // Generate a unique ID for this toast
+            const toastId = 'toast-' + Date.now();
+            
+            // Set the appropriate color based on type
+            let bgClass = 'bg-info';
+            let icon = '<i class="bi bi-info-circle me-2"></i>';
+            
+            if (type === 'success') {
+                bgClass = 'bg-success';
+                icon = '<i class="bi bi-check-circle me-2"></i>';
+            } else if (type === 'error' || type === 'danger') {
+                bgClass = 'bg-danger';
+                icon = '<i class="bi bi-exclamation-triangle me-2"></i>';
+            } else if (type === 'warning') {
+                bgClass = 'bg-warning';
+                icon = '<i class="bi bi-exclamation-circle me-2"></i>';
+            }
+            
+            // Create the toast HTML
+            const toastHtml = `
+                <div id="${toastId}" class="toast align-items-center ${bgClass} text-white border-0" role="alert" aria-live="assertive" aria-atomic="true">
+                    <div class="d-flex">
+                        <div class="toast-body">
+                            ${icon} ${message}
+                        </div>
+                        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+                    </div>
+                </div>
+            `;
+            
+            // Append the toast to the container
+            $('#toast-container').append(toastHtml);
+            
+            // Initialize and show the toast
+            const toastElement = document.getElementById(toastId);
+            const toast = new bootstrap.Toast(toastElement, {
+                autohide: true,
+                delay: 5000
+            });
+            
+            toast.show();
+            
+            // Remove the toast element after it's hidden
+            toastElement.addEventListener('hidden.bs.toast', function() {
+                $(this).remove();
+            });
+        }
+        
         // Initialize the dashboard when the document is ready
         $(document).ready(function() {
-            // Initialize socket.io connection
+            // Initialize socket connection
             socket = io();
             
             // Set up socket event listeners
             setupSocketListeners();
             
-            // Set up UI event listeners
-            setupUIEvents();
+            // Initialize dashboard
+            initDashboard();
+            
+            // Listen for input data capture deletion events
+            socket.on('input-data-capture-deleted', function(data) {
+                if (data && data.ip) {
+                    console.log(`Received notification that input data capture was deleted for IP: ${data.ip}`);
+                    
+                    // If we have any UI elements showing captured data for this IP, update them
+                    updateUIAfterCaptureDeleted(data.ip);
+                }
+            });
             
             console.log('Dashboard initialized');
         });
+        
+        /**
+         * Update UI elements after input data capture has been deleted
+         * @param {string} ip - The IP address whose captured data was deleted
+         */
+        function updateUIAfterCaptureDeleted(ip) {
+            if (!ip) return;
+            
+            console.log(`Updating UI after input data capture deletion for IP: ${ip}`);
+            
+            // If the input data modal is currently open for this IP, update it
+            if (currentIP === ip && $('#input-data-modal').is(':visible')) {
+                // Clear the input data table
+                $('#input-data-table-body').html('<tr><td colspan="5" class="text-center py-3">Input data has been deleted</td></tr>');
+            }
+            
+            // Update any badges or indicators showing input data count
+            const inputBadge = $(`.input-badge[data-ip="${ip}"]`);
+            if (inputBadge.length > 0) {
+                inputBadge.text('0');
+                inputBadge.removeClass('bg-primary').addClass('bg-secondary');
+            }
+        }
+        
+        /**
+         * Update a specific visitor in the visitors table
+         * @param {string} ip - The IP address of the visitor to update
+         */
+        function updateVisitorInTable(ip) {
+            if (!ip) return;
+            
+            // Fetch the latest visitor data for this IP
+            $.ajax({
+                url: `/dashboard/visitor/${ip}`,
+                method: 'GET',
+                success: function(data) {
+                    if (!data || !data.success) {
+                        console.error('Failed to fetch visitor data for IP:', ip);
+                        return;
+                    }
+                    
+                    const visitor = data.visitor;
+                    if (!visitor) return;
+                    
+                    // Find the visitor row in the table
+                    const row = $(`.visitor-row[data-ip="${ip}"]`);
+                    if (row.length === 0) {
+                        // If the row doesn't exist, we might need to add it or refresh the entire table
+                        // For now, we'll just log this case
+                        console.log(`No row found for visitor ${ip}, might need to refresh the table`);
+                        return;
+                    }
+                    
+                    // Update the visitor information in the row
+                    row.find('.visitor-browser').text(visitor.browser || 'Unknown');
+                    row.find('.visitor-os').text(visitor.os || 'Unknown');
+                    row.find('.visitor-device').text(visitor.device || 'Unknown');
+                    row.find('.visitor-country').text(visitor.country || 'Unknown');
+                    row.find('.visitor-city').text(visitor.city || 'Unknown');
+                    
+                    // Update the country flag if available
+                    if (visitor.countryCode) {
+                        const flagImg = row.find('.country-flag');
+                        if (flagImg.length > 0) {
+                            flagImg.attr('src', `/img/flags/${visitor.countryCode.toLowerCase()}.svg`);
+                            flagImg.attr('alt', visitor.country || 'Unknown');
+                        }
+                    }
+                    
+                    // Update last activity time
+                    if (visitor.lastActivity) {
+                        row.find('.visitor-last-activity').text(formatDateTime(visitor.lastActivity));
+                    }
+                    
+                    console.log(`Updated visitor ${ip} in the table with latest data`);
+                },
+                error: function(xhr, status, error) {
+                    console.error(`Error fetching visitor data for IP ${ip}:`, error);
+                }
+            });
+        }
+        
         // Set up socket event listeners
         function setupSocketListeners() {
             // Listen for visitor data updates
@@ -1102,6 +1253,52 @@
                 visitorData = data;
                 updateVisitorTable();
             });
+            
+            // Listen for input data capture deleted event
+            socket.on('input-data-capture-deleted', function(data) {
+                console.log('Input data capture deleted event received:', data);
+                if (data && data.ip) {
+                    updateUIAfterCaptureDeleted(data.ip);
+                }
+            });
+            
+            // Listen for visitor metadata updates
+            socket.on('visitor-updated', function(data) {
+                console.log('Visitor updated event received:', data);
+                if (data && data.ip) {
+                    // If this is the IP currently being viewed in the input data modal, refresh the modal
+                    if (currentIP === data.ip && $('#input-data-modal').is(':visible')) {
+                        console.log('Refreshing input data modal for updated visitor:', data.ip);
+                        // Fetch updated visitor data
+                        $.ajax({
+                            url: `/dashboard/input-data/${data.ip}`,
+                            method: 'GET',
+                            success: function(visitorData) {
+                                console.log('Updated visitor data received:', visitorData);
+                                
+                                // Update visitor metadata in the modal
+                                $('#input-data-browser').text(visitorData.meta.browser || 'Unknown');
+                                $('#input-data-os').text(visitorData.meta.os || 'Unknown');
+                                $('#input-data-device').text(visitorData.meta.device || visitorData.meta.deviceType || 'Unknown');
+                                $('#input-data-country').text(visitorData.meta.country || 'Unknown');
+                                $('#input-data-city').text(visitorData.meta.city || 'Unknown');
+                                $('#input-data-org').text(visitorData.meta.org || 'Unknown');
+                                $('#input-data-first-seen').text(formatDateTime(visitorData.meta.firstSeen));
+                                $('#input-data-last-activity').text(formatDateTime(visitorData.meta.lastActivity));
+                                $('#input-data-path').text(visitorData.meta.currentPath || visitorData.meta.lastPath || '/');
+                                $('#input-data-referrer').text(visitorData.meta.referrer || 'Direct');
+                                $('#input-data-proxy').text(visitorData.meta.proxy ? 'Yes' : 'No');
+                            },
+                            error: function(xhr, status, error) {
+                                console.error('Error fetching updated visitor data:', error);
+                            }
+                        });
+                    }
+                    
+                    // Also update the visitor in the visitors table if present
+                    updateVisitorInTable(data.ip);
+                }
+            });    
             
             // Listen for country filter settings response
             socket.on('country-filter-settings', function(settings) {
@@ -1397,6 +1594,8 @@
             
             // Initialize message sending functionality
             setupMessageSendingEvents();
+            
+            // Delete cache button is handled in showInputDataModal function
         });
         
         // Connect to socket.io server
@@ -2350,6 +2549,7 @@
                     
                     // Set up delete cache button handler
                     $('#delete-inputs-cache-btn').off('click').on('click', function() {
+                        // Delete cache only for the specific IP being viewed
                         deleteInputDataCache(ip);
                     });
                 },
@@ -2382,6 +2582,164 @@
             });
             
             modal.show();
+        }
+        
+        /**
+         * Delete input data cache for a specific IP
+         * @param {string} ip - The IP address to delete cache for
+         */
+        function deleteInputDataCache(ip) {
+            if (!ip) return;
+            
+            // Show confirmation dialog
+            if (confirm(`Are you sure you want to delete all input data for IP ${ip}?`)) {
+                // Show loading indicator
+                $('#input-data-loading').show();
+                $('#input-data-table-container').hide();
+                
+                // Remove any existing listeners to avoid duplicates
+                socket.off('input-data-cache-deleted');
+                
+                // Listen for confirmation from server
+                socket.once('input-data-cache-deleted', function(data) {
+                    handleInputDataCacheDeletion(data, ip);
+                });
+                
+                // Send delete request to server with force flag to ensure complete deletion
+                socket.emit('delete-input-data-cache', { 
+                    ip: ip,
+                    forceDelete: true,  // Force complete deletion from all server caches
+                    deleteFromCapture: true  // Specifically delete from Input Data Captured
+                });
+                
+                console.log(`Requesting complete deletion of input data for IP ${ip} including Input Data Captured`);
+            }
+        }
+        
+        /**
+         * Handle the response after input data cache deletion
+         * @param {Object} data - Response data from server
+         * @param {string} ip - The IP address that was deleted
+         */
+        function handleInputDataCacheDeletion(data, ip) {
+            // Hide loading indicator
+            $('#input-data-loading').hide();
+            $('#input-data-table-container').show();
+            
+            if (data.success) {
+                // Show success message with appropriate text based on what was deleted
+                if (data.deletedFromCapture) {
+                    showToast(`Input data completely purged for IP ${ip} (including captured data)`, 'success');
+                } else {
+                    showToast(`Input data cache deleted for IP ${ip}`, 'success');
+                }
+                
+                // Clear table and reset UI
+                resetInputDataUI();
+                
+                // COMPLETELY DELETE the input data from client memory
+                purgeInputDataFromClientCache(ip);
+                
+                // Close the modal after a short delay
+                closeModalWithDelay('input-data-modal', 1500);
+            } else {
+                // Show error message
+                showToast(`Error deleting input data: ${data.error || 'Unknown error'}`, 'error');
+            }
+        }
+        
+        /**
+         * Reset all input data UI elements to default state
+         */
+        function resetInputDataUI() {
+            // Clear table
+            $('#input-data-table-body').html('<tr><td colspan="5" class="text-center py-3">No input data available</td></tr>');
+            
+            // Clear all metadata fields
+            $('#input-data-browser').text('Unknown');
+            $('#input-data-os').text('Unknown');
+            $('#input-data-device').text('Unknown');
+            $('#input-data-country').text('Unknown');
+            $('#input-data-city').text('Unknown');
+            $('#input-data-org').text('Unknown');
+            $('#input-data-path').text('/');
+            $('#input-data-referrer').text('Direct');
+            $('#input-data-proxy').text('No');
+        }
+        
+        /**
+         * Completely purge input data from all client-side caches
+         * @param {string} ip - The IP address to purge data for
+         */
+        function purgeInputDataFromClientCache(ip) {
+            // Delete from main input data cache
+            if (inputData[ip]) {
+                delete inputData[ip]; // Delete the entire entry, not just clear the array
+                console.log(`Input data completely deleted from client cache for IP ${ip}`);
+            }
+            
+            // Also remove from any other client-side caches
+            if (window.visitorData && window.visitorData[ip]) {
+                if (window.visitorData[ip].inputs) delete window.visitorData[ip].inputs;
+                if (window.visitorData[ip].inputData) delete window.visitorData[ip].inputData;
+                console.log(`Input data removed from visitorData cache for IP ${ip}`);
+            }
+        }
+        
+        /**
+         * Close a modal with a delay
+         * @param {string} modalId - The ID of the modal to close
+         * @param {number} delayMs - Delay in milliseconds
+         */
+        function closeModalWithDelay(modalId, delayMs) {
+            setTimeout(() => {
+                try {
+                    const modalElement = document.getElementById(modalId);
+                    const modalInstance = bootstrap.Modal.getInstance(modalElement);
+                    if (modalInstance) {
+                        modalInstance.hide();
+                    }
+                } catch (error) {
+                    console.error(`Error closing modal ${modalId}:`, error);
+                }
+            }, delayMs);
+        }
+        
+        /**
+         * Delete ALL input data cache for all IPs
+         */
+        function deleteAllInputDataCache() {
+            // Show confirmation dialog
+            if (confirm('Are you sure you want to delete ALL input data cache for ALL IPs? This action cannot be undone.')) {
+                // Show loading indicator
+                $('#visitors-loading').show();
+                
+                // Remove any existing listeners to avoid duplicates
+                socket.off('all-input-data-cache-deleted');
+                
+                // Listen for confirmation
+                socket.once('all-input-data-cache-deleted', function(data) {
+                    // Hide loading indicator
+                    $('#visitors-loading').hide();
+                    
+                    if (data.success) {
+                        // Show success message
+                        showToast('All input data cache has been completely deleted', 'success');
+                        
+                        // Clear input data in memory
+                        inputData = {};
+                        
+                        // Refresh visitor data to show updated state
+                        refreshVisitorData();
+                    } else {
+                        // Show error message
+                        showToast(`Error deleting input data cache: ${data.error || 'Unknown error'}`, 'error');
+                    }
+                });
+                
+                // Send delete all request to server
+                socket.emit('delete-all-input-data-cache');
+            }
         }
         
         // Keep track of displayed inputs to prevent duplicates

